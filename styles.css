@@ -1,0 +1,746 @@
+/* Elementary Audio — Obsidian Plugin Styles */
+
+.ea-block-container {
+	padding: 16px;
+	border-radius: 6px;
+	background: var(--background-secondary);
+	margin: 8px 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Drum Pads Grid — matches Midicircuit app layout                     */
+/* ------------------------------------------------------------------ */
+
+.ea-drum-pads-container {
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.ea-drum-pads-grid {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	grid-template-rows: repeat(4, 1fr);
+	gap: 1px;
+	background: rgba(255, 255, 255, 0.06);
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.ea-drum-pad {
+	width: 100%;
+	padding-bottom: 65%; /* slightly wider than tall, matching app proportions */
+	position: relative;
+	border: none;
+	background: rgba(30, 30, 30, 0.95);
+	cursor: pointer;
+	transition: background 0.08s ease-out;
+	color: rgba(255, 255, 255, 0.45);
+	font-weight: 500;
+	font-size: 12px;
+	outline: none;
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+}
+
+.ea-drum-pad:hover {
+	background: rgba(50, 50, 50, 0.95);
+}
+
+.ea-drum-pad:active,
+.ea-drum-pad--active {
+	background: rgba(70, 70, 70, 0.95);
+}
+
+.ea-drum-pad--highlighted {
+	background: rgba(0, 255, 158, 0.15);
+	color: rgba(255, 255, 255, 0.8);
+}
+
+.ea-drum-pad-label {
+	position: absolute;
+	top: 8px;
+	left: 10px;
+	pointer-events: none;
+	letter-spacing: 0.01em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Text elements                                                       */
+/* ------------------------------------------------------------------ */
+
+.ea-drum-pads-hint {
+	margin-top: 10px;
+	margin-bottom: 0;
+	font-size: 13px;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.ea-drum-pads-soundbank {
+	margin-top: 4px;
+	margin-bottom: 0;
+	font-size: 11px;
+	color: var(--text-faint);
+}
+
+/* ------------------------------------------------------------------ */
+/* Piano Keys                                                          */
+/* ------------------------------------------------------------------ */
+
+.ea-piano-container {
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.ea-piano-keyboard {
+	position: relative;
+	max-width: 500px;
+	height: 120px;
+}
+
+.ea-piano-white-keys {
+	display: flex;
+	height: 100%;
+	gap: 2px;
+}
+
+.ea-piano-white-key {
+	flex: 1;
+	height: 100%;
+	background: #f7f7f7;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0 0 4px 4px;
+	cursor: pointer;
+	position: relative;
+	display: flex;
+	align-items: flex-end;
+	justify-content: center;
+	padding-bottom: 6px;
+	transition: background 0.08s ease-out;
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+}
+
+.ea-piano-white-key:hover {
+	background: #e8e8e8;
+}
+
+.ea-piano-white-key:active,
+.ea-piano-white-key.ea-piano-key--active {
+	background: #d0d0d0;
+}
+
+.ea-piano-white-key.ea-piano-key--highlighted {
+	background: var(--highlight-color, #00FF9E);
+	opacity: 0.6;
+}
+
+.ea-piano-white-key.ea-piano-key--highlighted.ea-piano-key--active {
+	opacity: 1;
+}
+
+.ea-piano-key-label {
+	font-size: 9px;
+	color: var(--text-muted);
+	pointer-events: none;
+}
+
+.ea-piano-black-keys {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 60%;
+	pointer-events: none;
+}
+
+.ea-piano-black-key {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	background: #1a1a1a;
+	border: none;
+	border-radius: 0 0 3px 3px;
+	cursor: pointer;
+	pointer-events: auto;
+	transition: background 0.08s ease-out;
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+	z-index: 1;
+}
+
+.ea-piano-black-key:hover {
+	background: #333;
+}
+
+.ea-piano-black-key:active,
+.ea-piano-black-key.ea-piano-key--active {
+	background: #555;
+}
+
+.ea-piano-black-key.ea-piano-key--highlighted {
+	background: var(--highlight-color, #00FF9E);
+	opacity: 0.75;
+}
+
+.ea-piano-black-key.ea-piano-key--highlighted.ea-piano-key--active {
+	opacity: 1;
+}
+
+.ea-piano-hint {
+	margin-top: 10px;
+	margin-bottom: 0;
+	font-size: 13px;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.ea-piano-soundbank {
+	margin-top: 4px;
+	margin-bottom: 0;
+	font-size: 11px;
+	color: var(--text-faint);
+}
+
+/* ------------------------------------------------------------------ */
+/* Transport                                                           */
+/* ------------------------------------------------------------------ */
+
+.ea-transport-container {
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.ea-transport-bar {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	max-width: 400px;
+}
+
+.ea-transport-play-btn {
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	border: 2px solid var(--text-muted);
+	background: transparent;
+	color: var(--text-normal);
+	font-size: 14px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: background 0.12s, border-color 0.12s;
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+	padding: 0;
+	line-height: 1;
+}
+
+.ea-transport-play-btn:hover {
+	border-color: var(--text-normal);
+}
+
+.ea-transport-play-btn--playing {
+	border-color: #FF5C24;
+	color: #FF5C24;
+}
+
+.ea-transport-info {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.ea-transport-tempo {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.ea-transport-timesig {
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
+.ea-transport-dots {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+
+.ea-transport-dot {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--background-modifier-border);
+	transition: background 0.08s, box-shadow 0.08s;
+}
+
+.ea-transport-dot--active {
+	background: #FF5C24;
+	box-shadow: 0 0 8px #FF5C24;
+}
+
+.ea-transport-loop {
+	font-size: 18px;
+	color: var(--text-muted);
+	margin-left: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* Callout                                                             */
+/* ------------------------------------------------------------------ */
+
+.ea-callout {
+	border-radius: 6px;
+	padding: 12px 16px;
+	border-left: 4px solid var(--text-muted);
+}
+
+.ea-callout--tip {
+	border-left-color: #00FF9E;
+	background: rgba(0, 255, 158, 0.06);
+}
+
+.ea-callout--info {
+	border-left-color: #2496FF;
+	background: rgba(36, 150, 255, 0.06);
+}
+
+.ea-callout--warning {
+	border-left-color: #FF5C24;
+	background: rgba(255, 92, 36, 0.06);
+}
+
+.ea-callout-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+
+.ea-callout-icon {
+	font-size: 16px;
+	line-height: 1;
+}
+
+.ea-callout-label {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-normal);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.ea-callout-text {
+	margin: 0;
+	font-size: 14px;
+	color: var(--text-normal);
+	line-height: 1.5;
+}
+
+/* ------------------------------------------------------------------ */
+/* Audio Player                                                        */
+/* ------------------------------------------------------------------ */
+
+.ea-audio-player-container {
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.ea-audio-player-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	max-width: 400px;
+}
+
+.ea-audio-player-btn {
+	width: 36px;
+	height: 36px;
+	min-width: 36px;
+	border-radius: 50%;
+	border: 2px solid var(--text-muted);
+	background: transparent;
+	color: var(--text-normal);
+	font-size: 12px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: background 0.12s, border-color 0.12s, transform 0.08s;
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+	padding: 0;
+	line-height: 1;
+}
+
+.ea-audio-player-btn:hover {
+	border-color: var(--text-normal);
+}
+
+.ea-audio-player-btn--playing {
+	border-color: #00FF9E;
+	color: #00FF9E;
+	transform: scale(0.93);
+}
+
+.ea-audio-player-info {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	flex: 1;
+	min-width: 0;
+}
+
+.ea-audio-player-label {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-normal);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.ea-audio-player-meta {
+	font-size: 11px;
+	color: var(--text-faint);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.ea-audio-player-waveform {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	height: 28px;
+}
+
+.ea-audio-player-bar {
+	width: 3px;
+	border-radius: 2px;
+	background: var(--text-faint);
+	transition: background 0.15s;
+}
+
+.ea-audio-player-bar--active {
+	background: #00FF9E;
+}
+
+/* ------------------------------------------------------------------ */
+/* Validation Warnings                                                 */
+/* ------------------------------------------------------------------ */
+
+.ea-validation-warning {
+	padding: 8px 12px;
+	margin: 4px 0 8px 0;
+	border-radius: 4px;
+	background: rgba(255, 200, 0, 0.12);
+	border-left: 3px solid #e6b800;
+	color: #e6b800;
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 1.4;
+}
+
+/* ------------------------------------------------------------------ */
+/* Question Component                                                  */
+/* ------------------------------------------------------------------ */
+
+.ea-question-container {
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.ea-question-text {
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--text-normal);
+	margin: 0 0 12px 0;
+	line-height: 1.5;
+}
+
+.ea-question-options {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.ea-question-option {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 16px;
+	border-radius: 6px;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	background: rgba(30, 30, 30, 0.6);
+	color: var(--text-normal);
+	cursor: pointer;
+	transition: background 0.12s, border-color 0.12s, opacity 0.15s;
+	text-align: left;
+	font-size: 14px;
+	line-height: 1.4;
+	width: 100%;
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+}
+
+.ea-question-option:hover:not(:disabled) {
+	background: rgba(50, 50, 50, 0.8);
+	border-color: rgba(255, 255, 255, 0.2);
+}
+
+.ea-question-option:disabled {
+	cursor: default;
+}
+
+.ea-question-option--correct {
+	border-color: #00FF9E;
+	background: rgba(0, 255, 158, 0.1);
+}
+
+.ea-question-option--wrong {
+	border-color: #FF245B;
+	background: rgba(255, 36, 91, 0.1);
+}
+
+.ea-question-option--dimmed {
+	opacity: 0.4;
+}
+
+.ea-question-option-indicator {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	min-width: 28px;
+	border-radius: 50%;
+	border: 2px solid rgba(255, 255, 255, 0.2);
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text-muted);
+	transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+
+.ea-question-option--correct .ea-question-option-indicator {
+	border-color: #00FF9E;
+	color: #00FF9E;
+	background: rgba(0, 255, 158, 0.15);
+}
+
+.ea-question-option--wrong .ea-question-option-indicator {
+	border-color: #FF245B;
+	color: #FF245B;
+	background: rgba(255, 36, 91, 0.15);
+}
+
+.ea-question-option-text {
+	flex: 1;
+}
+
+.ea-question-explanation {
+	margin-top: 12px;
+	padding: 10px 14px;
+	border-radius: 6px;
+	font-size: 13px;
+	line-height: 1.5;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.ea-question-explanation--correct {
+	background: rgba(0, 255, 158, 0.08);
+	border-left: 3px solid #00FF9E;
+}
+
+.ea-question-explanation--wrong {
+	background: rgba(255, 36, 91, 0.08);
+	border-left: 3px solid #FF245B;
+}
+
+.ea-question-explanation-label {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.ea-question-explanation--correct .ea-question-explanation-label {
+	color: #00FF9E;
+}
+
+.ea-question-explanation--wrong .ea-question-explanation-label {
+	color: #FF245B;
+}
+
+.ea-question-explanation-text {
+	color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------ */
+/* Piano Roll                                                          */
+/* ------------------------------------------------------------------ */
+
+.ea-piano-roll-container {
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.ea-piano-roll-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-bottom: 10px;
+}
+
+.ea-piano-roll-play-btn {
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	border: 2px solid rgba(255, 255, 255, 0.3);
+	background: transparent;
+	color: rgba(255, 255, 255, 0.8);
+	font-size: 12px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: background 0.12s, border-color 0.12s;
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+	padding: 0;
+	line-height: 1;
+}
+
+.ea-piano-roll-play-btn:hover {
+	border-color: rgba(255, 255, 255, 0.5);
+}
+
+.ea-piano-roll-play-btn--playing {
+	border-color: #00FF9E;
+	color: #00FF9E;
+}
+
+.ea-piano-roll-badge {
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	padding: 3px 10px;
+	border-radius: 10px;
+}
+
+.ea-piano-roll-badge--listen {
+	background: rgba(0, 255, 158, 0.15);
+	color: #00FF9E;
+}
+
+.ea-piano-roll-badge--interact {
+	background: rgba(255, 92, 36, 0.15);
+	color: #FF5C24;
+}
+
+.ea-piano-roll-track {
+	font-size: 11px;
+	color: rgba(255, 255, 255, 0.35);
+	margin-left: auto;
+}
+
+/* Grid layout: labels + note grid side by side */
+
+.ea-piano-roll-grid-wrapper {
+	display: flex;
+	border-radius: 6px;
+	overflow: hidden;
+	background: #111111;
+}
+
+.ea-piano-roll-labels {
+	display: flex;
+	flex-direction: column;
+	flex-shrink: 0;
+	width: 72px;
+	background: #0d0d0d;
+}
+
+.ea-piano-roll-label {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	padding: 0 10px;
+	font-size: 11px;
+	font-weight: 600;
+	color: #00FF9E;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+	white-space: nowrap;
+}
+
+.ea-piano-roll-labels .ea-piano-roll-label:last-child {
+	border-bottom: none;
+}
+
+/* Note grid */
+
+.ea-piano-roll-grid {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.ea-piano-roll-row {
+	display: flex;
+	flex: 1;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ea-piano-roll-grid .ea-piano-roll-row:last-child {
+	border-bottom: none;
+}
+
+.ea-piano-roll-cell {
+	flex: 1;
+	height: 28px;
+	border-right: 1px solid rgba(255, 255, 255, 0.04);
+	transition: background 0.06s;
+}
+
+/* Beat-line emphasis every 4 columns */
+.ea-piano-roll-cell--beat {
+	border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Filled note block */
+.ea-piano-roll-cell--note {
+	background: rgba(0, 255, 158, 0.55);
+	border-radius: 2px;
+	margin: 2px 1px;
+}
+
+/* Playhead highlight */
+.ea-piano-roll-cell--playhead {
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.ea-piano-roll-cell--note.ea-piano-roll-cell--playhead {
+	background: rgba(0, 255, 158, 0.85);
+}
+
+/* Hint & meta text below the grid */
+
+.ea-piano-roll-hint {
+	margin-top: 10px;
+	margin-bottom: 0;
+	font-size: 13px;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.ea-piano-roll-meta {
+	margin-top: 4px;
+	margin-bottom: 0;
+	font-size: 11px;
+	color: var(--text-faint);
+}

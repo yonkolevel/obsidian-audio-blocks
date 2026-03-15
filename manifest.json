@@ -1,0 +1,9 @@
+{
+	"id": "elementary-audio",
+	"name": "Elementary Audio",
+	"version": "0.1.0",
+	"minAppVersion": "1.0.0",
+	"description": "Interactive audio blocks in markdown — drum pads, piano, sequencer",
+	"author": "Ricardo Abreu",
+	"isDesktopOnly": true
+}
