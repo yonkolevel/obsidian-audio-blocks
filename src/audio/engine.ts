@@ -23,6 +23,8 @@ export class AudioEngine {
 	private sampleBuffers: AudioBuffer[] = [];
 	private initialized = false;
 	private soundbankManager: SoundbankManager | null = null;
+	/** Master output with compressor to prevent clipping when layering notes. */
+	private masterOut: GainNode | null = null;
 
 	/**
 	 * Map of MIDI note number → active note info.
@@ -51,8 +53,27 @@ export class AudioEngine {
 			await this.ctx.resume();
 		}
 
+		// Master output chain: gain → compressor → destination
+		// Prevents clipping when layering chords and multiple notes
+		const compressor = this.ctx.createDynamicsCompressor();
+		compressor.threshold.value = -12;
+		compressor.knee.value = 6;
+		compressor.ratio.value = 4;
+		compressor.attack.value = 0.003;
+		compressor.release.value = 0.1;
+
+		this.masterOut = this.ctx.createGain();
+		this.masterOut.gain.value = 0.8;
+		this.masterOut.connect(compressor);
+		compressor.connect(this.ctx.destination);
+
 		this.sampleBuffers = generateDrumKit(this.ctx);
 		this.initialized = true;
+	}
+
+	/** Get the output node all audio should connect to. */
+	private get output(): AudioNode {
+		return this.masterOut ?? this.ctx!.destination;
 	}
 
 	/**
@@ -75,7 +96,7 @@ export class AudioEngine {
 
 		const source = this.ctx.createBufferSource();
 		source.buffer = buffer;
-		source.connect(this.ctx.destination);
+		source.connect(this.output);
 		source.start();
 	}
 
@@ -110,7 +131,7 @@ export class AudioEngine {
 					semitoneDiff / 12
 				);
 
-				source.connect(this.ctx.destination);
+				source.connect(this.output);
 				source.start();
 				return;
 			}
@@ -189,23 +210,24 @@ export class AudioEngine {
 		carrier.type = "sine";
 		carrier.frequency.value = freq;
 
-		// Modulator at 2x frequency, depth decays for bell-like attack
+		// Modulator at 2x frequency — gentle depth for clean chord stacking
 		modulator.type = "sine";
 		modulator.frequency.value = freq * 2;
-		modGain.gain.setValueAtTime(freq * 1.5, t);
-		modGain.gain.exponentialRampToValueAtTime(freq * 0.01, t + duration * 0.8);
+		modGain.gain.setValueAtTime(freq * 0.4, t);
+		modGain.gain.exponentialRampToValueAtTime(freq * 0.005, t + duration * 0.7);
 
 		modulator.connect(modGain);
 		modGain.connect(carrier.frequency);
 
 		// Piano-like envelope: fast attack, quick decay to sustain, then release
+		// Low per-note gain so chords (3-4 notes) don't clip
 		output.gain.setValueAtTime(0, t);
-		output.gain.linearRampToValueAtTime(0.25, t + 0.005);
-		output.gain.exponentialRampToValueAtTime(0.08, t + 0.1);
+		output.gain.linearRampToValueAtTime(0.12, t + 0.005);
+		output.gain.exponentialRampToValueAtTime(0.04, t + 0.15);
 		output.gain.exponentialRampToValueAtTime(0.001, t + duration);
 
 		carrier.connect(output);
-		output.connect(this.ctx.destination);
+		output.connect(this.output);
 
 		carrier.start(t);
 		modulator.start(t);
@@ -248,21 +270,21 @@ export class AudioEngine {
 
 		modulator.type = "sine";
 		modulator.frequency.value = freq * 2;
-		// Modulation depth decays to a sustain level (not to silence)
-		modGain.gain.setValueAtTime(freq * 1.5, t);
-		modGain.gain.exponentialRampToValueAtTime(freq * 0.3, t + 0.3);
+		// Gentle modulation for clean chord stacking
+		modGain.gain.setValueAtTime(freq * 0.4, t);
+		modGain.gain.exponentialRampToValueAtTime(freq * 0.08, t + 0.3);
 
 		modulator.connect(modGain);
 		modGain.connect(carrier.frequency);
 
-		// Envelope: fast attack → decay → sustain at 0.08
+		// Envelope: fast attack → decay → sustain (low gain for chord stacking)
 		output.gain.setValueAtTime(0, t);
-		output.gain.linearRampToValueAtTime(0.25, t + 0.005);
-		output.gain.exponentialRampToValueAtTime(0.08, t + 0.1);
+		output.gain.linearRampToValueAtTime(0.12, t + 0.005);
+		output.gain.exponentialRampToValueAtTime(0.04, t + 0.15);
 		// Hold at sustain level indefinitely (no scheduled stop)
 
 		carrier.connect(output);
-		output.connect(ctx.destination);
+		output.connect(this.output);
 
 		carrier.start(t);
 		modulator.start(t);
@@ -328,7 +350,7 @@ export class AudioEngine {
 				output.gain.setValueAtTime(1, ctx.currentTime);
 
 				source.connect(output);
-				output.connect(ctx.destination);
+				output.connect(this.output);
 				source.start();
 
 				let released = false;
@@ -406,7 +428,7 @@ export class AudioEngine {
 			this.ctx.currentTime + 0.05
 		);
 		osc.connect(gain);
-		gain.connect(this.ctx.destination);
+		gain.connect(this.output);
 		osc.start();
 		osc.stop(this.ctx.currentTime + 0.05);
 	}
