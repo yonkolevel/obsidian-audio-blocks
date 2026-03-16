@@ -117,25 +117,73 @@ export class AudioEngine {
 	}
 
 	/**
-	 * Play a melodic tone at the given MIDI note number.
-	 * Uses a triangle oscillator with a quick exponential decay.
+	 * Get a human-readable sample name for a MIDI note in a soundbank.
 	 */
-	playTone(midiNote: number, duration = 0.3): void {
-		if (!this.ctx) return;
-		const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
-		const osc = this.ctx.createOscillator();
-		const gain = this.ctx.createGain();
-		osc.type = "triangle";
-		osc.frequency.value = freq;
-		gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
-		gain.gain.exponentialRampToValueAtTime(
-			0.001,
-			this.ctx.currentTime + duration
+	getSampleNameForNote(slug: string, midiNote: number): string | null {
+		return (
+			this.soundbankManager?.getSampleNameForNote(slug, midiNote) ??
+			null
 		);
-		osc.connect(gain);
-		gain.connect(this.ctx.destination);
-		osc.start();
-		osc.stop(this.ctx.currentTime + duration);
+	}
+
+	/**
+	 * Build a full map of MIDI note number → human-readable name for a soundbank.
+	 */
+	getNoteNamesForSoundbank(slug: string): Map<number, string> {
+		const map = new Map<number, string>();
+		if (!this.soundbankManager) return map;
+		const config = this.soundbankManager.getConfig(slug);
+		if (!config) return map;
+		for (const sample of config.samples) {
+			const name = this.soundbankManager.getSampleNameForNote(
+				slug,
+				sample.midiNumber
+			);
+			if (name) map.set(sample.midiNumber, name);
+		}
+		return map;
+	}
+
+	/**
+	 * Play a melodic tone at the given MIDI note number.
+	 * Uses FM synthesis to approximate an electric piano sound.
+	 */
+	playTone(midiNote: number, duration = 1.2): void {
+		if (!this.ctx) return;
+		const t = this.ctx.currentTime;
+		const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
+
+		// FM synthesis: modulator → carrier
+		const carrier = this.ctx.createOscillator();
+		const modulator = this.ctx.createOscillator();
+		const modGain = this.ctx.createGain();
+		const output = this.ctx.createGain();
+
+		carrier.type = "sine";
+		carrier.frequency.value = freq;
+
+		// Modulator at 2x frequency, depth decays for bell-like attack
+		modulator.type = "sine";
+		modulator.frequency.value = freq * 2;
+		modGain.gain.setValueAtTime(freq * 1.5, t);
+		modGain.gain.exponentialRampToValueAtTime(freq * 0.01, t + duration * 0.8);
+
+		modulator.connect(modGain);
+		modGain.connect(carrier.frequency);
+
+		// Piano-like envelope: fast attack, quick decay to sustain, then release
+		output.gain.setValueAtTime(0, t);
+		output.gain.linearRampToValueAtTime(0.25, t + 0.005);
+		output.gain.exponentialRampToValueAtTime(0.08, t + 0.1);
+		output.gain.exponentialRampToValueAtTime(0.001, t + duration);
+
+		carrier.connect(output);
+		output.connect(this.ctx.destination);
+
+		carrier.start(t);
+		modulator.start(t);
+		carrier.stop(t + duration);
+		modulator.stop(t + duration);
 	}
 
 	/**

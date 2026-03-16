@@ -103,7 +103,7 @@ export default class ElementaryAudioPlugin extends Plugin {
 		registerCalloutProcessor(this);
 		registerAudioPlayerProcessor(this, this.audioEngine);
 		registerQuestionProcessor(this);
-		registerPianoRollProcessor(this);
+		registerPianoRollProcessor(this, this.audioEngine);
 
 		// Register unknown block type handler for circuit block types
 		// that might be misspelled or not yet implemented

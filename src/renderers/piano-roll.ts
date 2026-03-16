@@ -22,7 +22,9 @@ import { Plugin, MarkdownPostProcessorContext } from "obsidian";
 import { createElement } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { PianoRoll } from "../components/PianoRoll";
-import { readPlayground, PlaygroundData } from "../playground/reader";
+import { readPlayground, PlaygroundData, NoteData } from "../playground/reader";
+import { savePlayground } from "../playground/writer";
+import { AudioEngine } from "../audio/engine";
 import * as path from "path";
 
 /**
@@ -42,8 +44,18 @@ function parseSimpleYaml(source: string): Record<string, string> {
 	return result;
 }
 
-export function registerPianoRollProcessor(plugin: Plugin): void {
+export function registerPianoRollProcessor(
+	plugin: Plugin,
+	engine: AudioEngine
+): void {
 	const roots: Root[] = [];
+
+	// Exclusive playback: only one piano roll plays at a time
+	let stopCurrentPlayback: (() => void) | null = null;
+	const requestExclusivePlayback = (stopFn: () => void) => {
+		if (stopCurrentPlayback) stopCurrentPlayback();
+		stopCurrentPlayback = stopFn;
+	};
 
 	plugin.registerMarkdownCodeBlockProcessor(
 		"pianoRoll",
@@ -69,17 +81,25 @@ export function registerPianoRollProcessor(plugin: Plugin): void {
 					? ("interaction" as const)
 					: ("playback" as const);
 
-			// Attempt to load playground data if a playground path is specified
-			let playgroundData: PlaygroundData | undefined;
+			// Resolve playground path: explicit YAML field, or inherit from
+			// the nearest preceding <!-- step: ..., playground: ... --> comment
+			const playgroundField =
+				config.playground ??
+				findPlaygroundFromStepComment(plugin, el, ctx);
 
-			if (config.playground) {
+			let playgroundData: PlaygroundData | undefined;
+			let resolvedPlaygroundPath: string | undefined;
+
+			if (playgroundField) {
 				try {
-					const playgroundPath = resolvePlaygroundPath(
+					resolvedPlaygroundPath = resolvePlaygroundPath(
 						plugin,
-						config.playground,
+						playgroundField,
 						ctx.sourcePath
 					);
-					playgroundData = await readPlayground(playgroundPath);
+					playgroundData = await readPlayground(
+						resolvedPlaygroundPath
+					);
 				} catch (err) {
 					const warningBar = el.createDiv({
 						cls: "ea-validation-warning",
@@ -89,11 +109,81 @@ export function registerPianoRollProcessor(plugin: Plugin): void {
 					warningBar.textContent = `Could not load playground: ${message}`;
 					console.error(
 						"PianoRoll: failed to load playground",
-						config.playground,
+						playgroundField,
 						err
 					);
 				}
 			}
+
+			// Determine soundbank slug from the target track
+			const track = playgroundData?.tracks.find(
+				(t) => t.id === trackID
+			);
+			const soundbankSlug = track?.soundbankSlug || "";
+			const isDrum = track ? track.type === "drum" : true;
+
+			// Eagerly load the soundbank if present
+			if (soundbankSlug) {
+				engine
+					.initialize()
+					.then(() =>
+						engine.loadSoundbankForBlock(soundbankSlug)
+					)
+					.catch(() => {
+						/* fallback to synth */
+					});
+			}
+
+			// Save callback: writes edits back to the .mcplayground file
+			const handleSave = resolvedPlaygroundPath
+				? async (_trackID: number, notes: NoteData[]) => {
+						await savePlayground(
+							resolvedPlaygroundPath!,
+							_trackID,
+							notes
+						);
+					}
+				: undefined;
+
+			// Play callback: plays audio feedback when a note is triggered
+			const handleNotePlay = async (
+				noteNumber: number,
+				durationBeats?: number
+			) => {
+				await engine.initialize();
+				if (soundbankSlug) {
+					await engine.loadSoundbankForBlock(soundbankSlug);
+					engine.playSoundbankNote(soundbankSlug, noteNumber);
+				} else if (isDrum) {
+					engine.playClick();
+				} else {
+					// Melodic: convert beat duration to seconds
+					const bpm = playgroundData?.tempo ?? 120;
+					const durationSec = durationBeats
+						? (durationBeats / bpm) * 60 + 0.3 // sustain + release tail
+						: 1.2;
+					engine.playTone(noteNumber, durationSec);
+				}
+			};
+
+			// Metronome click callback
+			const handleMetronomeClick = async () => {
+				await engine.initialize();
+				engine.playClick();
+			};
+
+			// Init callback: ensures engine + soundbank are ready (must run in user gesture)
+			const handlePlaybackStart = async () => {
+				await engine.initialize();
+				if (soundbankSlug) {
+					await engine.loadSoundbankForBlock(soundbankSlug);
+				}
+			};
+
+			// Build note names from soundbank config (resolves "Note 24" → "Kick")
+			const noteNames = soundbankSlug
+				? engine.getNoteNamesForSoundbank(soundbankSlug)
+				: undefined;
 
 			const container = el.createDiv({ cls: "ea-block-container" });
 			const root = createRoot(container);
@@ -107,7 +197,15 @@ export function registerPianoRollProcessor(plugin: Plugin): void {
 					minInteractions: config.minInteractions
 						? parseInt(config.minInteractions, 10)
 						: undefined,
+					defaultMetronomeOn: config.metronomeEnabled === "true",
 					playgroundData,
+					playgroundPath: resolvedPlaygroundPath,
+					onSave: handleSave,
+					onNotePlay: handleNotePlay,
+					onPlaybackStart: handlePlaybackStart,
+					onRequestExclusivePlayback: requestExclusivePlayback,
+					onMetronomeClick: handleMetronomeClick,
+					noteNames,
 				})
 			);
 		}
@@ -127,6 +225,39 @@ export function registerPianoRollProcessor(plugin: Plugin): void {
 }
 
 /**
+ * Look for a `<!-- step: ..., playground: ... -->` comment above this code
+ * block in the source markdown. Returns the playground path if found.
+ */
+function findPlaygroundFromStepComment(
+	plugin: Plugin,
+	el: HTMLElement,
+	ctx: MarkdownPostProcessorContext
+): string | undefined {
+	const sectionInfo = ctx.getSectionInfo(el);
+	if (!sectionInfo) return undefined;
+
+	const { text, lineStart } = sectionInfo;
+	const lines = text.split("\n");
+
+	// Scan upward from the code block's opening line
+	for (let i = lineStart - 1; i >= 0; i--) {
+		const line = lines[i]?.trim();
+		if (!line) continue;
+
+		// Match <!-- step: ..., playground: ... -->
+		const match = line.match(
+			/<!--\s*step:.*?playground:\s*([^\s,>]+)/
+		);
+		if (match) return match[1];
+
+		// Stop scanning if we hit a heading or another code block
+		if (line.startsWith("#") || line.startsWith("```")) break;
+	}
+
+	return undefined;
+}
+
+/**
  * Resolve the playground path to an absolute filesystem path.
  *
  * The `playground` field in the YAML block can be:
@@ -141,7 +272,7 @@ function resolvePlaygroundPath(
 	playgroundField: string,
 	sourcePath: string
 ): string {
-	// Get the vault's base path on disk (Electron only — works in Obsidian desktop)
+	// Get the vault's base path on disk (Electron only -- works in Obsidian desktop)
 	const adapter = plugin.app.vault.adapter as { getBasePath?: () => string };
 	if (!adapter.getBasePath) {
 		throw new Error(

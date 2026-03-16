@@ -4,6 +4,8 @@ export interface DrumPadsProps {
 	soundbank: string;
 	hint?: string;
 	highlightedPads?: number[];
+	validation?: "playback" | "interaction";
+	minInteractions?: number;
 	onPadTap: (padIndex: number) => void;
 }
 
@@ -30,9 +32,12 @@ export function DrumPads({
 	soundbank,
 	hint,
 	highlightedPads,
+	validation,
+	minInteractions,
 	onPadTap,
 }: DrumPadsProps) {
 	const [activePads, setActivePads] = React.useState<Set<number>>(new Set());
+	const [interactionCount, setInteractionCount] = React.useState(0);
 	const timeoutsRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(
 		new Map()
 	);
@@ -40,6 +45,7 @@ export function DrumPads({
 	const handlePadDown = useCallback(
 		(index: number) => {
 			onPadTap(index);
+			setInteractionCount((c) => c + 1);
 
 			setActivePads((prev) => {
 				const next = new Set(prev);
@@ -64,8 +70,28 @@ export function DrumPads({
 		[onPadTap]
 	);
 
+	const isComplete =
+		validation === "interaction" &&
+		minInteractions !== undefined &&
+		interactionCount >= minInteractions;
+
 	return (
 		<div className="ea-drum-pads-container">
+			{validation === "interaction" && minInteractions !== undefined && (
+				<div className="ea-drum-pads-progress">
+					<span
+						className={
+							isComplete
+								? "ea-drum-pads-progress-text ea-drum-pads-progress-text--done"
+								: "ea-drum-pads-progress-text"
+						}
+					>
+						{isComplete
+							? "Complete!"
+							: `${interactionCount} / ${minInteractions} taps`}
+					</span>
+				</div>
+			)}
 			<div className="ea-drum-pads-grid">
 				{PAD_LABELS.map((label, index) => {
 					const isHighlighted = highlightedPads?.includes(index);

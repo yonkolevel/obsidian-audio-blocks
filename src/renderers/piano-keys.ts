@@ -111,6 +111,10 @@ export function registerPianoKeysProcessor(
 					hint: config.hint,
 					highlightedNotes: parseNumberArray(config.highlightedNotes),
 					highlightColor: config.highlightColor,
+					validation: config.validation === "interaction" ? "interaction" : undefined,
+					minInteractions: config.minInteractions
+						? parseInt(config.minInteractions, 10)
+						: undefined,
 					onNoteOn: handleNoteOn,
 					onNoteOff: handleNoteOff,
 				})

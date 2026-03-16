@@ -44,6 +44,25 @@ export interface LoadedSoundbank {
 }
 
 // ---------------------------------------------------------------------------
+// Sample short-name → human-readable label map
+// ---------------------------------------------------------------------------
+
+const SAMPLE_SHORT_NAMES: Record<string, string> = {
+	BD: "Kick",
+	SD: "Snare",
+	RS: "Rimshot",
+	CP: "Clap",
+	BT: "Tom",
+	LT: "Low Tom",
+	MT: "Mid Tom",
+	HT: "High Tom",
+	CH: "Closed Hat",
+	OH: "Open Hat",
+	CY: "Cymbal",
+	CB: "Cowbell",
+};
+
+// ---------------------------------------------------------------------------
 // Manager
 // ---------------------------------------------------------------------------
 
@@ -215,6 +234,18 @@ export class SoundbankManager {
 	// ------------------------------------------------------------------
 	// Accessors
 	// ------------------------------------------------------------------
+
+	/**
+	 * Get a human-readable sample name for a MIDI note in a discovered soundbank.
+	 * Uses the sample's fileName and maps common abbreviations to full names.
+	 */
+	getSampleNameForNote(slug: string, midiNote: number): string | null {
+		const config = this.registry.get(slug);
+		if (!config) return null;
+		const sample = config.samples.find((s) => s.midiNumber === midiNote);
+		if (!sample?.fileName) return null;
+		return SAMPLE_SHORT_NAMES[sample.fileName] ?? sample.fileName;
+	}
 
 	/**
 	 * Get a previously loaded soundbank (returns null if not yet loaded).

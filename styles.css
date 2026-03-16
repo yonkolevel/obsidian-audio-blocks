@@ -68,6 +68,23 @@
 /* Text elements                                                       */
 /* ------------------------------------------------------------------ */
 
+.ea-drum-pads-progress,
+.ea-piano-progress {
+	margin-bottom: 8px;
+}
+
+.ea-drum-pads-progress-text,
+.ea-piano-progress-text {
+	font-size: 12px;
+	font-weight: 600;
+	color: rgba(255, 255, 255, 0.5);
+}
+
+.ea-drum-pads-progress-text--done,
+.ea-piano-progress-text--done {
+	color: #00FF9E;
+}
+
 .ea-drum-pads-hint {
 	margin-top: 10px;
 	margin-bottom: 0;
@@ -185,6 +202,91 @@
 
 .ea-piano-black-key.ea-piano-key--highlighted.ea-piano-key--active {
 	opacity: 1;
+}
+
+/* Header with progress + keyboard toggle */
+
+.ea-piano-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 8px;
+	min-height: 24px;
+}
+
+.ea-piano-header-right {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-left: auto;
+}
+
+.ea-piano-keyboard-toggle {
+	background: transparent;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	border-radius: 4px;
+	font-size: 16px;
+	cursor: pointer;
+	padding: 2px 6px;
+	line-height: 1;
+	opacity: 0.4;
+	transition: opacity 0.15s;
+}
+
+.ea-piano-keyboard-toggle:hover {
+	opacity: 0.7;
+}
+
+.ea-piano-keyboard-toggle--active {
+	opacity: 1;
+	border-color: #FF5C24;
+	color: #FF5C24;
+}
+
+.ea-piano-octave-label {
+	font-size: 11px;
+	font-weight: 600;
+	color: rgba(255, 255, 255, 0.5);
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.ea-piano-octave-btn {
+	width: 18px;
+	height: 18px;
+	border-radius: 3px;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	background: transparent;
+	color: rgba(255, 255, 255, 0.5);
+	font-size: 10px;
+	font-weight: 600;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	line-height: 1;
+}
+
+.ea-piano-octave-btn:hover {
+	border-color: rgba(255, 255, 255, 0.4);
+	color: rgba(255, 255, 255, 0.9);
+}
+
+/* Keyboard shortcut hints on piano keys */
+
+.ea-piano-kb-hint {
+	font-size: 9px;
+	font-weight: 700;
+	color: rgba(0, 0, 0, 0.4);
+	text-transform: uppercase;
+	pointer-events: none;
+}
+
+.ea-piano-kb-hint--black {
+	color: rgba(255, 255, 255, 0.4);
+	font-size: 8px;
 }
 
 .ea-piano-hint {
@@ -642,10 +744,62 @@
 	color: #FF5C24;
 }
 
+.ea-piano-roll-tempo-controls {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.ea-piano-roll-tempo-btn {
+	width: 20px;
+	height: 20px;
+	border-radius: 4px;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	background: transparent;
+	color: rgba(255, 255, 255, 0.6);
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	line-height: 1;
+	transition: border-color 0.12s, color 0.12s;
+}
+
+.ea-piano-roll-tempo-btn:hover {
+	border-color: rgba(255, 255, 255, 0.4);
+	color: rgba(255, 255, 255, 0.9);
+}
+
 .ea-piano-roll-tempo {
 	font-size: 11px;
 	font-weight: 600;
 	color: rgba(255, 255, 255, 0.5);
+	min-width: 52px;
+	text-align: center;
+}
+
+.ea-piano-roll-metronome-btn {
+	background: transparent;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	border-radius: 4px;
+	font-size: 14px;
+	cursor: pointer;
+	padding: 2px 6px;
+	line-height: 1;
+	opacity: 0.4;
+	transition: opacity 0.15s;
+}
+
+.ea-piano-roll-metronome-btn:hover {
+	opacity: 0.7;
+}
+
+.ea-piano-roll-metronome-btn--active {
+	opacity: 1;
+	border-color: #FF5C24;
 }
 
 .ea-piano-roll-track {
@@ -658,7 +812,7 @@
 	max-width: 220px;
 }
 
-/* Grid layout: labels + note grid side by side */
+/* Grid layout: labels + scrollable grid */
 
 .ea-piano-roll-grid-wrapper {
 	display: flex;
@@ -671,12 +825,12 @@
 	display: flex;
 	flex-direction: column;
 	flex-shrink: 0;
-	width: 72px;
+	width: 80px;
 	background: #0d0d0d;
+	z-index: 2;
 }
 
 .ea-piano-roll-label {
-	flex: 1;
 	display: flex;
 	align-items: center;
 	padding: 0 10px;
@@ -685,57 +839,156 @@
 	color: #00FF9E;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 	white-space: nowrap;
+	box-sizing: border-box;
 }
 
 .ea-piano-roll-labels .ea-piano-roll-label:last-child {
 	border-bottom: none;
 }
 
-/* Note grid */
+/* Scrollable grid container */
 
-.ea-piano-roll-grid {
+.ea-piano-roll-scroll {
 	flex: 1;
-	display: flex;
-	flex-direction: column;
+	overflow-x: auto;
+	overflow-y: hidden;
 	min-width: 0;
 }
 
-.ea-piano-roll-row {
-	display: flex;
-	flex: 1;
+.ea-piano-roll-grid {
+	position: relative;
+	touch-action: pan-x;
+}
+
+/* Row backgrounds (alternating subtle stripes) */
+
+.ea-piano-roll-row-bg {
+	position: absolute;
+	left: 0;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+	box-sizing: border-box;
 }
 
-.ea-piano-roll-grid .ea-piano-roll-row:last-child {
-	border-bottom: none;
+.ea-piano-roll-row-bg:nth-child(odd) {
+	background: rgba(255, 255, 255, 0.015);
 }
 
-.ea-piano-roll-cell {
-	flex: 1;
-	height: 28px;
-	border-right: 1px solid rgba(255, 255, 255, 0.04);
-	transition: background 0.06s;
+/* Beat lines */
+
+.ea-piano-roll-beat-line {
+	position: absolute;
+	top: 0;
+	width: 1px;
+	background: rgba(255, 255, 255, 0.12);
+	pointer-events: none;
+	z-index: 1;
 }
 
-/* Beat-line emphasis every 4 columns */
-.ea-piano-roll-cell--beat {
-	border-left: 1px solid rgba(255, 255, 255, 0.12);
+/* Playhead */
+
+.ea-piano-roll-playhead {
+	position: absolute;
+	top: 0;
+	width: 2px;
+	background: rgba(255, 255, 255, 0.6);
+	pointer-events: none;
+	z-index: 3;
+	transition: left 0.04s linear;
 }
 
-/* Filled note block */
-.ea-piano-roll-cell--note {
-	background: rgba(0, 255, 158, 0.55);
-	border-radius: 2px;
-	margin: 2px 1px;
+/* Notes — absolutely positioned rectangles */
+
+.ea-piano-roll-note {
+	position: absolute;
+	background: rgba(0, 255, 158, 0.65);
+	border-radius: 3px;
+	z-index: 2;
+	transition: opacity 0.1s;
+	box-sizing: border-box;
+	border: 1px solid rgba(0, 255, 158, 0.3);
 }
 
-/* Playhead highlight */
-.ea-piano-roll-cell--playhead {
-	background: rgba(255, 255, 255, 0.06);
+.ea-piano-roll-note--editable {
+	cursor: grab;
 }
 
-.ea-piano-roll-cell--note.ea-piano-roll-cell--playhead {
+.ea-piano-roll-note--editable:hover {
 	background: rgba(0, 255, 158, 0.85);
+}
+
+.ea-piano-roll-note--dragging {
+	opacity: 0.7;
+	cursor: grabbing;
+	z-index: 10;
+}
+
+/* Resize handle on right edge */
+
+.ea-piano-roll-resize-handle {
+	position: absolute;
+	right: 0;
+	top: 0;
+	width: 8px;
+	height: 100%;
+	cursor: ew-resize;
+	border-radius: 0 3px 3px 0;
+}
+
+.ea-piano-roll-resize-handle:hover {
+	background: rgba(255, 255, 255, 0.15);
+}
+
+/* Save area */
+
+.ea-piano-roll-save-area {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.ea-piano-roll-dirty-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #FF5C24;
+	flex-shrink: 0;
+}
+
+.ea-piano-roll-save-btn {
+	padding: 3px 12px;
+	border-radius: 10px;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	background: rgba(255, 92, 36, 0.15);
+	color: #FF5C24;
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	cursor: pointer;
+	transition: background 0.12s, border-color 0.12s;
+	-webkit-tap-highlight-color: transparent;
+	touch-action: manipulation;
+	line-height: 1.4;
+}
+
+.ea-piano-roll-save-btn:hover {
+	background: rgba(255, 92, 36, 0.25);
+	border-color: rgba(255, 255, 255, 0.35);
+}
+
+.ea-piano-roll-save-status {
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.ea-piano-roll-save-status--saving {
+	color: rgba(255, 255, 255, 0.5);
+}
+
+.ea-piano-roll-save-status--saved {
+	color: #00FF9E;
 }
 
 /* Hint & meta text below the grid */

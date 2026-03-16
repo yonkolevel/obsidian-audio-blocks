@@ -115,6 +115,10 @@ export function registerDrumPadsProcessor(
 					soundbank: soundbankSlug || "default",
 					hint: config.hint,
 					highlightedPads: parseNumberArray(config.highlightedPads),
+					validation: config.validation === "interaction" ? "interaction" : undefined,
+					minInteractions: config.minInteractions
+						? parseInt(config.minInteractions, 10)
+						: undefined,
 					onPadTap: handlePadTap,
 				})
 			);

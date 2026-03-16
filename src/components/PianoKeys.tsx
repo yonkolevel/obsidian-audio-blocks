@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 export interface PianoKeysProps {
 	soundbank: string;
@@ -6,19 +6,15 @@ export interface PianoKeysProps {
 	hint?: string;
 	highlightedNotes?: number[];
 	highlightColor?: string;
+	validation?: "playback" | "interaction";
+	minInteractions?: number;
 	onNoteOn: (noteNumber: number) => void;
 	onNoteOff: (noteNumber: number) => void;
 }
 
-/**
- * Maps a position within one octave to note info.
- * White keys: C=0, D=1, E=2, F=3, G=4, A=5, B=6
- * Black keys overlay between certain white keys.
- */
 interface KeyDef {
 	note: string;
 	isBlack: boolean;
-	/** Semitone offset within the octave (C=0, C#=1, ..., B=11) */
 	semitone: number;
 }
 
@@ -37,21 +33,59 @@ const OCTAVE_KEYS: KeyDef[] = [
 	{ note: "B", isBlack: false, semitone: 11 },
 ];
 
-/** Number of white keys in one octave */
 const WHITE_KEYS_PER_OCTAVE = 7;
 
-/**
- * Position of each black key as a fraction of white key width,
- * measured from the left edge of the octave.
- * C# sits between C and D, D# between D and E, etc.
- */
 const BLACK_KEY_POSITIONS: Record<number, number> = {
-	1: 0.75, // C# — between key 0 (C) and key 1 (D)
-	3: 1.75, // D# — between key 1 (D) and key 2 (E)
-	6: 3.75, // F# — between key 3 (F) and key 4 (G)
-	8: 4.75, // G# — between key 4 (G) and key 5 (A)
-	10: 5.75, // A# — between key 5 (A) and key 6 (B)
+	1: 0.75,
+	3: 1.75,
+	6: 3.75,
+	8: 4.75,
+	10: 5.75,
 };
+
+// ---------------------------------------------------------------------------
+// Computer keyboard → semitone offset mapping
+// Bottom row = white keys, top row = black keys
+// ---------------------------------------------------------------------------
+
+const KEYBOARD_MAP: Record<string, number> = {
+	// White keys: A S D F G H J K L ; '
+	a: 0,   // C
+	s: 2,   // D
+	d: 4,   // E
+	f: 5,   // F
+	g: 7,   // G
+	h: 9,   // A
+	j: 11,  // B
+	k: 12,  // C+1
+	l: 14,  // D+1
+	";": 16, // E+1
+	"'": 17, // F+1
+	// Black keys: W E T Y U O P
+	w: 1,   // C#
+	e: 3,   // D#
+	t: 6,   // F#
+	y: 8,   // G#
+	u: 10,  // A#
+	o: 13,  // C#+1
+	p: 15,  // D#+1
+};
+
+/** Get the keyboard shortcut label for a given semitone offset. */
+function keyLabel(semitoneOffset: number): string | undefined {
+	for (const [key, offset] of Object.entries(KEYBOARD_MAP)) {
+		if (offset === semitoneOffset) {
+			if (key === ";") return ";";
+			if (key === "'") return "'";
+			return key.toUpperCase();
+		}
+	}
+	return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export function PianoKeys({
 	soundbank,
@@ -59,30 +93,32 @@ export function PianoKeys({
 	hint,
 	highlightedNotes,
 	highlightColor = "#00FF9E",
+	validation,
+	minInteractions,
 	onNoteOn,
 	onNoteOff,
 }: PianoKeysProps) {
-	const [activeNotes, setActiveNotes] = React.useState<Set<number>>(
-		new Set()
-	);
-	const timeoutsRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(
-		new Map()
-	);
+	const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
+	const [interactionCount, setInteractionCount] = useState(0);
+	const [keyboardEnabled, setKeyboardEnabled] = useState(false);
+	const [keyboardOctave, setKeyboardOctave] = useState(4); // C4 = MIDI 60
+	const timeoutsRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+	const heldKeysRef = useRef<Set<string>>(new Set());
+	const containerRef = useRef<HTMLDivElement>(null);
 
-	// Starting MIDI note — middle C (C4) = 60
 	const startNote = 60;
 	const totalWhiteKeys = WHITE_KEYS_PER_OCTAVE * octaves;
 
 	const handleNoteOn = useCallback(
 		(midiNote: number) => {
 			onNoteOn(midiNote);
+			setInteractionCount((c) => c + 1);
 			setActiveNotes((prev) => {
 				const next = new Set(prev);
 				next.add(midiNote);
 				return next;
 			});
 
-			// Clear existing timeout
 			const existing = timeoutsRef.current.get(midiNote);
 			if (existing) clearTimeout(existing);
 
@@ -99,7 +135,61 @@ export function PianoKeys({
 		[onNoteOn]
 	);
 
+	// ------------------------------------------------------------------
+	// Computer keyboard handler
+	// ------------------------------------------------------------------
+	useEffect(() => {
+		if (!keyboardEnabled) return;
+
+		const handleKeyDown = (e: KeyboardEvent) => {
+			const key = e.key.toLowerCase();
+
+			// Octave shift
+			if (key === "z" || key === "x") {
+				e.preventDefault();
+				e.stopPropagation();
+				if (key === "z") setKeyboardOctave((o) => Math.max(1, o - 1));
+				else setKeyboardOctave((o) => Math.min(7, o + 1));
+				return;
+			}
+
+			const offset = KEYBOARD_MAP[key];
+			if (offset === undefined) return;
+
+			// Prevent Obsidian from capturing the keypress
+			e.preventDefault();
+			e.stopPropagation();
+
+			if (heldKeysRef.current.has(key)) return; // prevent key repeat
+			heldKeysRef.current.add(key);
+
+			const midiNote = keyboardOctave * 12 + 12 + offset;
+			handleNoteOn(midiNote);
+		};
+
+		const handleKeyUp = (e: KeyboardEvent) => {
+			const key = e.key.toLowerCase();
+			heldKeysRef.current.delete(key);
+
+			const offset = KEYBOARD_MAP[key];
+			if (offset === undefined) return;
+			const midiNote = keyboardOctave * 12 + 12 + offset;
+			onNoteOff(midiNote);
+		};
+
+		document.addEventListener("keydown", handleKeyDown);
+		document.addEventListener("keyup", handleKeyUp);
+
+		return () => {
+			document.removeEventListener("keydown", handleKeyDown);
+			document.removeEventListener("keyup", handleKeyUp);
+			heldKeysRef.current.clear();
+		};
+	}, [keyboardEnabled, keyboardOctave, handleNoteOn, onNoteOff]);
+
+	// ------------------------------------------------------------------
 	// Build key elements
+	// ------------------------------------------------------------------
 	const whiteKeys: React.ReactElement[] = [];
 	const blackKeys: React.ReactElement[] = [];
 
@@ -109,9 +199,14 @@ export function PianoKeys({
 			const isActive = activeNotes.has(midiNote);
 			const isHighlighted = highlightedNotes?.includes(midiNote);
 
+			// Compute keyboard shortcut label for this key
+			const semitoneFromKeyboardBase = midiNote - (keyboardOctave * 12 + 12);
+			const kbLabel =
+				keyboardEnabled && semitoneFromKeyboardBase >= 0 && semitoneFromKeyboardBase <= 17
+					? keyLabel(semitoneFromKeyboardBase)
+					: undefined;
+
 			if (!keyDef.isBlack) {
-				// White key
-				const whiteIndex = whiteKeys.length;
 				whiteKeys.push(
 					<button
 						key={midiNote}
@@ -124,9 +219,7 @@ export function PianoKeys({
 							.join(" ")}
 						style={
 							isHighlighted
-								? ({
-										"--highlight-color": highlightColor,
-									} as React.CSSProperties)
+								? ({ "--highlight-color": highlightColor } as React.CSSProperties)
 								: undefined
 						}
 						onPointerDown={(e) => {
@@ -136,18 +229,19 @@ export function PianoKeys({
 						onPointerUp={() => onNoteOff(midiNote)}
 						onPointerLeave={() => onNoteOff(midiNote)}
 					>
-						{oct === 0 && keyDef.semitone === 0 && (
-							<span className="ea-piano-key-label">C4</span>
-						)}
+						<span className="ea-piano-key-label">
+							{kbLabel && (
+								<span className="ea-piano-kb-hint">{kbLabel}</span>
+							)}
+							{oct === 0 && keyDef.semitone === 0 && !kbLabel && "C4"}
+						</span>
 					</button>
 				);
 			} else {
-				// Black key — position relative to the octave
 				const pos = BLACK_KEY_POSITIONS[keyDef.semitone];
 				if (pos === undefined) continue;
 				const leftPercent =
-					((oct * WHITE_KEYS_PER_OCTAVE + pos) / totalWhiteKeys) *
-					100;
+					((oct * WHITE_KEYS_PER_OCTAVE + pos) / totalWhiteKeys) * 100;
 
 				blackKeys.push(
 					<button
@@ -163,11 +257,7 @@ export function PianoKeys({
 							{
 								left: `${leftPercent}%`,
 								width: `${(0.55 / totalWhiteKeys) * 100}%`,
-								...(isHighlighted
-									? {
-											"--highlight-color": highlightColor,
-										}
-									: {}),
+								...(isHighlighted ? { "--highlight-color": highlightColor } : {}),
 							} as React.CSSProperties
 						}
 						onPointerDown={(e) => {
@@ -176,14 +266,76 @@ export function PianoKeys({
 						}}
 						onPointerUp={() => onNoteOff(midiNote)}
 						onPointerLeave={() => onNoteOff(midiNote)}
-					/>
+					>
+						{kbLabel && <span className="ea-piano-kb-hint ea-piano-kb-hint--black">{kbLabel}</span>}
+					</button>
 				);
 			}
 		}
 	}
 
+	const isComplete =
+		validation === "interaction" &&
+		minInteractions !== undefined &&
+		interactionCount >= minInteractions;
+
 	return (
-		<div className="ea-piano-container">
+		<div className="ea-piano-container" ref={containerRef}>
+			<div className="ea-piano-header">
+				{validation === "interaction" && minInteractions !== undefined && (
+					<span
+						className={
+							isComplete
+								? "ea-piano-progress-text ea-piano-progress-text--done"
+								: "ea-piano-progress-text"
+						}
+					>
+						{isComplete
+							? "Complete!"
+							: `${interactionCount} / ${minInteractions} notes`}
+					</span>
+				)}
+				<div className="ea-piano-header-right">
+					{keyboardEnabled && (
+						<span className="ea-piano-octave-label">
+							C{keyboardOctave}
+							<button
+								className="ea-piano-octave-btn"
+								onPointerDown={(e) => {
+									e.preventDefault();
+									setKeyboardOctave((o) => Math.max(1, o - 1));
+								}}
+							>
+								Z
+							</button>
+							<button
+								className="ea-piano-octave-btn"
+								onPointerDown={(e) => {
+									e.preventDefault();
+									setKeyboardOctave((o) => Math.min(7, o + 1));
+								}}
+							>
+								X
+							</button>
+						</span>
+					)}
+					<button
+						className={[
+							"ea-piano-keyboard-toggle",
+							keyboardEnabled ? "ea-piano-keyboard-toggle--active" : "",
+						]
+							.filter(Boolean)
+							.join(" ")}
+						onPointerDown={(e) => {
+							e.preventDefault();
+							setKeyboardEnabled((v) => !v);
+						}}
+						title="Toggle computer keyboard input (ASDF = notes, Z/X = octave)"
+					>
+						{"\u2328"}
+					</button>
+				</div>
+			</div>
 			<div className="ea-piano-keyboard">
 				<div className="ea-piano-white-keys">{whiteKeys}</div>
 				<div className="ea-piano-black-keys">{blackKeys}</div>
