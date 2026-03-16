@@ -289,4 +289,63 @@ export class SoundbankManager {
 
 		return null;
 	}
+
+	/**
+	 * Find the nearest available sample for a given MIDI note, enabling
+	 * pitch-shifted playback for melodic soundbanks.
+	 *
+	 * Lookup order:
+	 * 1. Direct hit (midiNote matches a sample's midiNumber exactly)
+	 * 2. Range match (midiNote falls within a sample's minRange..maxRange)
+	 * 3. Nearest sample by MIDI number distance
+	 *
+	 * Returns the AudioBuffer and the root MIDI note of the matched sample,
+	 * so the caller can calculate the playback rate for pitch-shifting.
+	 */
+	findNearestSample(
+		slug: string,
+		midiNote: number
+	): { buffer: AudioBuffer; rootNote: number } | null {
+		const loaded = this.loaded.get(slug);
+		if (!loaded) return null;
+
+		// 1. Direct hit
+		const direct = loaded.samples.get(midiNote);
+		if (direct) return { buffer: direct, rootNote: midiNote };
+
+		// 2. Range-based lookup
+		for (const sampleCfg of loaded.config.samples) {
+			const min = sampleCfg.minRange ?? sampleCfg.midiNumber;
+			const max = sampleCfg.maxRange ?? sampleCfg.midiNumber;
+			if (midiNote >= min && midiNote <= max) {
+				const buf = loaded.samples.get(sampleCfg.midiNumber);
+				if (buf) {
+					return {
+						buffer: buf,
+						rootNote: sampleCfg.midiNumber,
+					};
+				}
+			}
+		}
+
+		// 3. Nearest sample by MIDI number distance
+		let bestDistance = Infinity;
+		let bestNote = -1;
+		let bestBuffer: AudioBuffer | null = null;
+
+		for (const [sampleNote, buffer] of loaded.samples) {
+			const distance = Math.abs(midiNote - sampleNote);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				bestNote = sampleNote;
+				bestBuffer = buffer;
+			}
+		}
+
+		if (bestBuffer) {
+			return { buffer: bestBuffer, rootNote: bestNote };
+		}
+
+		return null;
+	}
 }
