@@ -150,14 +150,14 @@ export function registerPianoKeysProcessor(
 
 				if (soundbankSlug) {
 					await engine.loadSoundbankForBlock(soundbankSlug);
-					engine.playSoundbankNote(soundbankSlug, midiNote);
+					engine.playSoundbankNoteWithRelease(soundbankSlug, midiNote);
 				} else {
-					engine.playTone(midiNote);
+					engine.playToneWithRelease(midiNote);
 				}
 			};
 
-			const handleNoteOff = (_midiNote: number) => {
-				// For the prototype, tones self-decay — nothing to do here.
+			const handleNoteOff = (midiNote: number) => {
+				engine.stopNote(midiNote);
 			};
 
 			// Parse validation mode
