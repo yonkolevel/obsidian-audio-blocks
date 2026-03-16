@@ -193,101 +193,125 @@ export class AudioEngine {
 	}
 
 	/**
-	 * Play a melodic tone at the given MIDI note number.
-	 * Uses FM synthesis to approximate an electric piano sound.
+	 * Create the additive piano synth voice and connect it to the output.
+	 * Returns { master, oscillators } for envelope control.
+	 *
+	 * The synth uses:
+	 * - Fundamental + slightly detuned copy for warmth/chorus
+	 * - 2nd and 3rd harmonics with faster decay for brightness
+	 * - Short filtered noise burst for the hammer/attack transient
 	 */
-	playTone(midiNote: number, duration = 1.2): void {
+	private createPianoVoice(freq: number): {
+		master: GainNode;
+		oscillators: OscillatorNode[];
+	} {
+		const ctx = this.ctx!;
+		const t = ctx.currentTime;
+
+		const master = ctx.createGain();
+		master.gain.value = 0;
+		master.connect(this.output);
+
+		const oscillators: OscillatorNode[] = [];
+
+		// Harmonic partials: [frequency multiplier, initial gain, decay rate]
+		const partials: [number, number, number][] = [
+			[1.0, 0.35, 0.8],      // fundamental
+			[1.002, 0.2, 0.8],     // detuned copy for warmth
+			[2.0, 0.1, 0.4],      // octave harmonic
+			[3.01, 0.03, 0.25],   // slightly inharmonic 5th
+			[4.0, 0.015, 0.15],   // 2nd octave (bright shimmer)
+		];
+
+		for (const [ratio, gain, decayRate] of partials) {
+			const osc = ctx.createOscillator();
+			const g = ctx.createGain();
+			osc.type = "sine";
+			osc.frequency.value = freq * ratio;
+
+			// Each partial has its own gain with independent decay
+			g.gain.setValueAtTime(gain, t);
+			if (ratio > 1.5) {
+				// Higher partials decay faster → tone mellows over time
+				g.gain.setTargetAtTime(gain * 0.02, t + 0.01, decayRate);
+			}
+
+			osc.connect(g);
+			g.connect(master);
+			osc.start(t);
+			oscillators.push(osc);
+		}
+
+		// Attack transient: short burst of filtered noise (hammer hit)
+		const noiseLen = Math.floor(ctx.sampleRate * 0.015);
+		const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
+		const noiseData = noiseBuf.getChannelData(0);
+		for (let i = 0; i < noiseLen; i++) {
+			noiseData[i] = (Math.random() * 2 - 1);
+		}
+		const noise = ctx.createBufferSource();
+		noise.buffer = noiseBuf;
+
+		const noiseFilter = ctx.createBiquadFilter();
+		noiseFilter.type = "bandpass";
+		noiseFilter.frequency.value = Math.min(freq * 6, 8000);
+		noiseFilter.Q.value = 1.5;
+
+		const noiseGain = ctx.createGain();
+		noiseGain.gain.setValueAtTime(0.06, t);
+		noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.015);
+
+		noise.connect(noiseFilter);
+		noiseFilter.connect(noiseGain);
+		noiseGain.connect(master);
+		noise.start(t);
+
+		return { master, oscillators };
+	}
+
+	/**
+	 * Play a melodic tone at the given MIDI note number.
+	 * Uses additive synthesis with noise transient for a piano-like sound.
+	 */
+	playTone(midiNote: number, duration = 1.5): void {
 		if (!this.ctx) return;
 		const t = this.ctx.currentTime;
 		const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
 
-		// FM synthesis: modulator → carrier
-		const carrier = this.ctx.createOscillator();
-		const modulator = this.ctx.createOscillator();
-		const modGain = this.ctx.createGain();
-		const output = this.ctx.createGain();
+		const { master, oscillators } = this.createPianoVoice(freq);
 
-		carrier.type = "sine";
-		carrier.frequency.value = freq;
+		// Envelope: fast attack → initial decay → slow sustain decay → release
+		master.gain.setValueAtTime(0, t);
+		master.gain.linearRampToValueAtTime(1.0, t + 0.003);
+		master.gain.setTargetAtTime(0.35, t + 0.003, 0.12);
+		master.gain.setTargetAtTime(0.001, t + duration * 0.7, duration * 0.15);
 
-		// Modulator at 2x frequency — gentle depth for clean chord stacking
-		modulator.type = "sine";
-		modulator.frequency.value = freq * 2;
-		modGain.gain.setValueAtTime(freq * 0.4, t);
-		modGain.gain.exponentialRampToValueAtTime(freq * 0.005, t + duration * 0.7);
-
-		modulator.connect(modGain);
-		modGain.connect(carrier.frequency);
-
-		// Piano-like envelope: fast attack, quick decay to sustain, then release
-		// Low per-note gain so chords (3-4 notes) don't clip
-		output.gain.setValueAtTime(0, t);
-		output.gain.linearRampToValueAtTime(0.12, t + 0.005);
-		output.gain.exponentialRampToValueAtTime(0.04, t + 0.15);
-		output.gain.exponentialRampToValueAtTime(0.001, t + duration);
-
-		carrier.connect(output);
-		output.connect(this.output);
-
-		carrier.start(t);
-		modulator.start(t);
-		carrier.stop(t + duration);
-		modulator.stop(t + duration);
+		// Stop oscillators after full duration + tail
+		const stopTime = t + duration + 0.3;
+		for (const osc of oscillators) {
+			osc.stop(stopTime);
+		}
 	}
 
 	/**
 	 * Play a melodic tone that sustains until explicitly stopped.
-	 *
-	 * Returns a stop function that triggers the release envelope, or null if
-	 * the engine is not initialized. The note is also tracked in the
-	 * activeNotes map so it can be stopped via `stopNote(midiNote)`.
-	 *
-	 * If the same MIDI note is already playing, the previous instance is
-	 * stopped before the new one begins (re-trigger behavior).
-	 *
-	 * Used for interactive keyboard playing where the user holds a key and
-	 * releases it. For sequencer playback with known durations, use
-	 * `playTone(midiNote, duration)` instead.
+	 * Returns a stop function, or null if engine not initialized.
 	 */
 	playToneWithRelease(midiNote: number): (() => void) | null {
 		if (!this.ctx) return null;
 
-		// Re-trigger: stop the previous instance of this note if still active
 		this.stopNote(midiNote);
 
 		const ctx = this.ctx;
 		const t = ctx.currentTime;
 		const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
 
-		// FM synthesis: modulator → carrier (same timbre as playTone)
-		const carrier = ctx.createOscillator();
-		const modulator = ctx.createOscillator();
-		const modGain = ctx.createGain();
-		const output = ctx.createGain();
+		const { master, oscillators } = this.createPianoVoice(freq);
 
-		carrier.type = "sine";
-		carrier.frequency.value = freq;
-
-		modulator.type = "sine";
-		modulator.frequency.value = freq * 2;
-		// Gentle modulation for clean chord stacking
-		modGain.gain.setValueAtTime(freq * 0.4, t);
-		modGain.gain.exponentialRampToValueAtTime(freq * 0.08, t + 0.3);
-
-		modulator.connect(modGain);
-		modGain.connect(carrier.frequency);
-
-		// Envelope: fast attack → decay → sustain (low gain for chord stacking)
-		output.gain.setValueAtTime(0, t);
-		output.gain.linearRampToValueAtTime(0.12, t + 0.005);
-		output.gain.exponentialRampToValueAtTime(0.04, t + 0.15);
-		// Hold at sustain level indefinitely (no scheduled stop)
-
-		carrier.connect(output);
-		output.connect(this.output);
-
-		carrier.start(t);
-		modulator.start(t);
+		// Envelope: fast attack → decay to sustain level, hold indefinitely
+		master.gain.setValueAtTime(0, t);
+		master.gain.linearRampToValueAtTime(1.0, t + 0.003);
+		master.gain.setTargetAtTime(0.35, t + 0.003, 0.12);
 
 		let released = false;
 
@@ -297,21 +321,15 @@ export class AudioEngine {
 			this.activeNotes.delete(midiNote);
 
 			const now = ctx.currentTime;
-			const releaseDuration = 0.15;
+			const releaseDuration = 0.2;
 
-			// Cancel any in-progress ramps and ramp to silence
-			output.gain.cancelScheduledValues(now);
-			output.gain.setValueAtTime(output.gain.value, now);
-			output.gain.linearRampToValueAtTime(0, now + releaseDuration);
+			master.gain.cancelScheduledValues(now);
+			master.gain.setValueAtTime(master.gain.value, now);
+			master.gain.linearRampToValueAtTime(0, now + releaseDuration);
 
-			// Also fade out the modulation depth
-			modGain.gain.cancelScheduledValues(now);
-			modGain.gain.setValueAtTime(modGain.gain.value, now);
-			modGain.gain.linearRampToValueAtTime(0, now + releaseDuration);
-
-			// Stop oscillators after the release finishes
-			carrier.stop(now + releaseDuration + 0.01);
-			modulator.stop(now + releaseDuration + 0.01);
+			for (const osc of oscillators) {
+				osc.stop(now + releaseDuration + 0.01);
+			}
 		};
 
 		this.activeNotes.set(midiNote, { stop });
