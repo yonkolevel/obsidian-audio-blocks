@@ -6,8 +6,10 @@ export interface PianoKeysProps {
 	hint?: string;
 	highlightedNotes?: number[];
 	highlightColor?: string;
-	validation?: "playback" | "interaction";
+	validation?: "playback" | "interaction" | "chord" | "scale";
 	minInteractions?: number;
+	expectedChord?: number[];
+	expectedScale?: number[];
 	onNoteOn: (noteNumber: number) => void;
 	onNoteOff: (noteNumber: number) => void;
 }
@@ -95,11 +97,14 @@ export function PianoKeys({
 	highlightColor = "#00FF9E",
 	validation,
 	minInteractions,
+	expectedChord,
+	expectedScale,
 	onNoteOn,
 	onNoteOff,
 }: PianoKeysProps) {
 	const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
 	const [interactionCount, setInteractionCount] = useState(0);
+	const [uniqueNotesPlayed, setUniqueNotesPlayed] = useState<Set<number>>(new Set());
 	const [keyboardEnabled, setKeyboardEnabled] = useState(false);
 	const [keyboardOctave, setKeyboardOctave] = useState(4); // C4 = MIDI 60
 	const timeoutsRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
@@ -119,6 +124,17 @@ export function PianoKeys({
 				return next;
 			});
 
+			// Track unique pitch classes for chord/scale validation
+			if (validation === "chord" || validation === "scale") {
+				const pitchClass = midiNote % 12;
+				setUniqueNotesPlayed((prev) => {
+					if (prev.has(pitchClass)) return prev;
+					const next = new Set(prev);
+					next.add(pitchClass);
+					return next;
+				});
+			}
+
 			const existing = timeoutsRef.current.get(midiNote);
 			if (existing) clearTimeout(existing);
 
@@ -132,7 +148,7 @@ export function PianoKeys({
 			}, 300);
 			timeoutsRef.current.set(midiNote, timeout);
 		},
-		[onNoteOn]
+		[onNoteOn, validation]
 	);
 
 	// ------------------------------------------------------------------
@@ -274,10 +290,20 @@ export function PianoKeys({
 		}
 	}
 
+	// Determine expected pitch classes for chord/scale validation
+	const expectedNotes = validation === "chord" ? expectedChord : validation === "scale" ? expectedScale : undefined;
+	const expectedPitchClasses = expectedNotes?.map((n) => n % 12);
+	const matchedCount = expectedPitchClasses
+		? expectedPitchClasses.filter((pc) => uniqueNotesPlayed.has(pc)).length
+		: 0;
+
 	const isComplete =
-		validation === "interaction" &&
-		minInteractions !== undefined &&
-		interactionCount >= minInteractions;
+		(validation === "interaction" &&
+			minInteractions !== undefined &&
+			interactionCount >= minInteractions) ||
+		((validation === "chord" || validation === "scale") &&
+			expectedPitchClasses !== undefined &&
+			matchedCount >= expectedPitchClasses.length);
 
 	return (
 		<div className="ea-piano-container" ref={containerRef}>
@@ -293,6 +319,19 @@ export function PianoKeys({
 						{isComplete
 							? "Complete!"
 							: `${interactionCount} / ${minInteractions} notes`}
+					</span>
+				)}
+				{(validation === "chord" || validation === "scale") && expectedPitchClasses !== undefined && (
+					<span
+						className={
+							isComplete
+								? "ea-piano-progress-text ea-piano-progress-text--done"
+								: "ea-piano-progress-text"
+						}
+					>
+						{isComplete
+							? "Complete!"
+							: `${matchedCount} / ${expectedPitchClasses.length} notes found`}
 					</span>
 				)}
 				<div className="ea-piano-header-right">

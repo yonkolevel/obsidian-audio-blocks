@@ -637,6 +637,14 @@ export function PianoRoll({
 						{activeNotes.map((note, idx) => {
 							const isDragging =
 								dragState?.noteIdx === idx && dragState.committed;
+							const noteStartCol = Math.round(note.position * 4);
+							const noteEndCol = Math.round((note.position + note.duration) * 4);
+							const isNoteActive =
+								isPlaying &&
+								currentCol >= 0 &&
+								currentCol >= noteStartCol &&
+								currentCol < noteEndCol;
+							const showLabel = note.duration >= 0.75;
 							return (
 								<div
 									key={idx}
@@ -644,6 +652,7 @@ export function PianoRoll({
 										"ea-piano-roll-note",
 										isDragging ? "ea-piano-roll-note--dragging" : "",
 										isEditable ? "ea-piano-roll-note--editable" : "",
+										isNoteActive ? "ea-piano-roll-note--playing" : "",
 									]
 										.filter(Boolean)
 										.join(" ")}
@@ -654,6 +663,11 @@ export function PianoRoll({
 											: undefined
 									}
 								>
+									{showLabel && (
+										<span className="ea-piano-roll-note-label">
+											{resolveNoteLabel(note.noteNumber, isDrum, noteNames)}
+										</span>
+									)}
 									{/* Resize handle on right edge */}
 									{isEditable && (
 										<div
