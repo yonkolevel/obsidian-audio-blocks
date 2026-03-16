@@ -7,16 +7,23 @@
  * trackID: 0
  * validation: playback
  * hint: Listen to the basic 4/4 pattern
+ * playground: assets/kick-pattern.mcplayground
  * ```
  *
- * This processor parses the YAML config and mounts a React PianoRoll component
- * into the rendered markdown.
+ * This processor parses the YAML config, optionally loads a .mcplayground
+ * file, and mounts a React PianoRoll component into the rendered markdown.
+ *
+ * The `playground` path is resolved relative to the vault root. The
+ * .mcplayground file is a ZIP archive containing `bundle/song.json` with
+ * track and MIDI note data.
  */
 
-import { Plugin } from "obsidian";
+import { Plugin, MarkdownPostProcessorContext } from "obsidian";
 import { createElement } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { PianoRoll } from "../components/PianoRoll";
+import { readPlayground, PlaygroundData } from "../playground/reader";
+import * as path from "path";
 
 /**
  * Minimal YAML parser for flat key-value configs.
@@ -40,7 +47,11 @@ export function registerPianoRollProcessor(plugin: Plugin): void {
 
 	plugin.registerMarkdownCodeBlockProcessor(
 		"pianoRoll",
-		(source: string, el: HTMLElement) => {
+		async (
+			source: string,
+			el: HTMLElement,
+			ctx: MarkdownPostProcessorContext
+		) => {
 			const config = parseSimpleYaml(source);
 
 			// Validation: warn if trackID is missing
@@ -52,23 +63,51 @@ export function registerPianoRollProcessor(plugin: Plugin): void {
 					"Warning: pianoRoll block is missing 'trackID' property";
 			}
 
+			const trackID = parseInt(config.trackID, 10) || 0;
+			const validation =
+				config.validation === "interaction"
+					? ("interaction" as const)
+					: ("playback" as const);
+
+			// Attempt to load playground data if a playground path is specified
+			let playgroundData: PlaygroundData | undefined;
+
+			if (config.playground) {
+				try {
+					const playgroundPath = resolvePlaygroundPath(
+						plugin,
+						config.playground,
+						ctx.sourcePath
+					);
+					playgroundData = await readPlayground(playgroundPath);
+				} catch (err) {
+					const warningBar = el.createDiv({
+						cls: "ea-validation-warning",
+					});
+					const message =
+						err instanceof Error ? err.message : String(err);
+					warningBar.textContent = `Could not load playground: ${message}`;
+					console.error(
+						"PianoRoll: failed to load playground",
+						config.playground,
+						err
+					);
+				}
+			}
+
 			const container = el.createDiv({ cls: "ea-block-container" });
 			const root = createRoot(container);
 			roots.push(root);
 
-			const validation =
-				config.validation === "interaction"
-					? "interaction"
-					: "playback";
-
 			root.render(
 				createElement(PianoRoll, {
-					trackID: parseInt(config.trackID, 10) || 0,
+					trackID,
 					validation,
 					hint: config.hint,
 					minInteractions: config.minInteractions
 						? parseInt(config.minInteractions, 10)
 						: undefined,
+					playgroundData,
 				})
 			);
 		}
@@ -85,4 +124,38 @@ export function registerPianoRollProcessor(plugin: Plugin): void {
 		}
 		roots.length = 0;
 	});
+}
+
+/**
+ * Resolve the playground path to an absolute filesystem path.
+ *
+ * The `playground` field in the YAML block can be:
+ * - A path relative to the current note's directory (e.g., "assets/kick.mcplayground")
+ * - A path relative to the vault root (e.g., "/Lessons/assets/kick.mcplayground")
+ *
+ * We first try resolving relative to the current note's folder, then
+ * fall back to resolving relative to the vault root.
+ */
+function resolvePlaygroundPath(
+	plugin: Plugin,
+	playgroundField: string,
+	sourcePath: string
+): string {
+	// Get the vault's base path on disk (Electron only — works in Obsidian desktop)
+	const adapter = plugin.app.vault.adapter as { getBasePath?: () => string };
+	if (!adapter.getBasePath) {
+		throw new Error(
+			"Cannot resolve playground path: vault adapter does not support getBasePath (mobile not supported)"
+		);
+	}
+	const vaultBase = adapter.getBasePath();
+
+	// If the path starts with /, treat it as vault-root-relative
+	if (playgroundField.startsWith("/")) {
+		return path.join(vaultBase, playgroundField);
+	}
+
+	// Otherwise, resolve relative to the current note's directory
+	const noteDir = path.dirname(sourcePath);
+	return path.join(vaultBase, noteDir, playgroundField);
 }

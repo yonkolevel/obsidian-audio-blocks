@@ -15,10 +15,11 @@
 		"typescript": "^5.0.0"
 	},
 	"dependencies": {
-		"react": "^18.0.0",
-		"react-dom": "^18.0.0",
 		"@elemaudio/core": "^4.0.0",
 		"@elemaudio/web-renderer": "^4.0.0",
-		"js-yaml": "^4.1.0"
+		"js-yaml": "^4.1.0",
+		"jszip": "^3.10.1",
+		"react": "^18.0.0",
+		"react-dom": "^18.0.0"
 	}
 }

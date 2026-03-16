@@ -1,5 +1,6 @@
-import { Plugin, Notice } from "obsidian";
+import { Plugin, Notice, PluginSettingTab, App, Setting } from "obsidian";
 import { AudioEngine } from "./audio/engine";
+import { SoundbankManager } from "./audio/soundbank-manager";
 import { registerDrumPadsProcessor } from "./renderers/drum-pads";
 import { registerPianoKeysProcessor } from "./renderers/piano-keys";
 import { registerTransportProcessor } from "./renderers/transport";
@@ -21,6 +22,23 @@ const KNOWN_BLOCK_TYPES = [
 	"audio",
 	"question",
 ];
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+interface ElementaryAudioSettings {
+	soundbanksPath: string;
+}
+
+const DEFAULT_SETTINGS: ElementaryAudioSettings = {
+	soundbanksPath:
+		"/Users/ricardoabreu/Development/midicircuit-macos/Sounds/Default SoundBanks",
+};
+
+// ---------------------------------------------------------------------------
+// Frontmatter parser
+// ---------------------------------------------------------------------------
 
 /**
  * Minimal YAML parser for flat key-value frontmatter.
@@ -49,11 +67,34 @@ function parseFrontmatter(
 	return { frontmatter, body };
 }
 
+// ---------------------------------------------------------------------------
+// Plugin
+// ---------------------------------------------------------------------------
+
 export default class ElementaryAudioPlugin extends Plugin {
 	audioEngine: AudioEngine = new AudioEngine();
+	soundbankManager: SoundbankManager | null = null;
+	settings: ElementaryAudioSettings = DEFAULT_SETTINGS;
 
 	async onload() {
 		console.log("Elementary Audio: loading plugin");
+
+		// Load persisted settings
+		await this.loadSettings();
+
+		// Create and wire SoundbankManager
+		this.soundbankManager = new SoundbankManager(
+			this.settings.soundbanksPath
+		);
+		this.audioEngine.setSoundbankManager(this.soundbankManager);
+
+		// Kick off soundbank discovery in background
+		this.soundbankManager.discoverSoundbanks().catch((err) => {
+			console.warn("Elementary Audio: soundbank discovery failed:", err);
+		});
+
+		// Register settings tab
+		this.addSettingTab(new ElementaryAudioSettingTab(this.app, this));
 
 		// Register interactive block processors
 		registerDrumPadsProcessor(this, this.audioEngine);
@@ -76,6 +117,28 @@ export default class ElementaryAudioPlugin extends Plugin {
 	onunload() {
 		console.log("Elementary Audio: unloading plugin");
 		this.audioEngine.dispose();
+	}
+
+	async loadSettings(): Promise<void> {
+		const data = await this.loadData();
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+
+		// Update SoundbankManager path and re-discover
+		if (this.soundbankManager) {
+			this.soundbankManager.setSoundbanksPath(
+				this.settings.soundbanksPath
+			);
+			this.soundbankManager.discoverSoundbanks().catch((err) => {
+				console.warn(
+					"Elementary Audio: soundbank re-discovery failed:",
+					err
+				);
+			});
+		}
 	}
 
 	/**
@@ -226,5 +289,41 @@ export default class ElementaryAudioPlugin extends Plugin {
 				}
 			},
 		});
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Settings Tab
+// ---------------------------------------------------------------------------
+
+class ElementaryAudioSettingTab extends PluginSettingTab {
+	plugin: ElementaryAudioPlugin;
+
+	constructor(app: App, plugin: ElementaryAudioPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+
+		containerEl.createEl("h2", { text: "Elementary Audio Settings" });
+
+		new Setting(containerEl)
+			.setName("Soundbanks path")
+			.setDesc(
+				"Absolute path to the Default SoundBanks folder. " +
+					"Each subfolder should contain a config.json and .wav files."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("/path/to/Default SoundBanks")
+					.setValue(this.plugin.settings.soundbanksPath)
+					.onChange(async (value) => {
+						this.plugin.settings.soundbanksPath = value;
+						await this.plugin.saveSettings();
+					})
+			);
 	}
 }

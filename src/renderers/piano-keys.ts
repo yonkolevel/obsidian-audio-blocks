@@ -11,6 +11,10 @@
  *
  * This processor parses the YAML config and mounts a React PianoKeys component
  * into the rendered markdown.
+ *
+ * If a soundbank is specified and available, real .wav samples are loaded
+ * and played for each key. Otherwise a synthesized triangle-wave tone is
+ * used as a fallback.
  */
 
 import { Plugin } from "obsidian";
@@ -60,9 +64,10 @@ export function registerPianoKeysProcessor(
 		"pianoKeys",
 		(source: string, el: HTMLElement) => {
 			const config = parseSimpleYaml(source);
+			const soundbankSlug = config.soundbank || "";
 
 			// Validation: warn if soundbank is missing
-			if (!config.soundbank) {
+			if (!soundbankSlug) {
 				const warningBar = el.createDiv({
 					cls: "ea-validation-warning",
 				});
@@ -74,9 +79,25 @@ export function registerPianoKeysProcessor(
 			const root = createRoot(container);
 			roots.push(root);
 
+			// Eagerly start loading the soundbank
+			if (soundbankSlug) {
+				engine
+					.initialize()
+					.then(() => engine.loadSoundbankForBlock(soundbankSlug))
+					.catch(() => {
+						/* fallback to synth */
+					});
+			}
+
 			const handleNoteOn = async (midiNote: number) => {
 				await engine.initialize();
-				engine.playTone(midiNote);
+
+				if (soundbankSlug) {
+					await engine.loadSoundbankForBlock(soundbankSlug);
+					engine.playSoundbankNote(soundbankSlug, midiNote);
+				} else {
+					engine.playTone(midiNote);
+				}
 			};
 
 			const handleNoteOff = (_midiNote: number) => {
@@ -85,7 +106,7 @@ export function registerPianoKeysProcessor(
 
 			root.render(
 				createElement(PianoKeys, {
-					soundbank: config.soundbank || "default",
+					soundbank: soundbankSlug || "default",
 					octaves: parseInt(config.octaves, 10) || 1,
 					hint: config.hint,
 					highlightedNotes: parseNumberArray(config.highlightedNotes),

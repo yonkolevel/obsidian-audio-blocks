@@ -21,6 +21,8 @@ esbuild
 			"@lezer/common",
 			"@lezer/highlight",
 			"@lezer/lr",
+			"fs",
+			"path",
 		],
 		format: "cjs",
 		target: "es2018",

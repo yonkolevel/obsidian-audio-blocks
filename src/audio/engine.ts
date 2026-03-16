@@ -10,11 +10,20 @@
  */
 
 import { generateDrumKit } from "./synth-samples";
+import { SoundbankManager } from "./soundbank-manager";
 
 export class AudioEngine {
 	private ctx: AudioContext | null = null;
 	private sampleBuffers: AudioBuffer[] = [];
 	private initialized = false;
+	private soundbankManager: SoundbankManager | null = null;
+
+	/**
+	 * Attach a SoundbankManager so the engine can play real samples.
+	 */
+	setSoundbankManager(manager: SoundbankManager): void {
+		this.soundbankManager = manager;
+	}
 
 	/**
 	 * Lazily create the AudioContext and generate the built-in drum kit.
@@ -35,6 +44,14 @@ export class AudioEngine {
 	}
 
 	/**
+	 * Get the AudioContext (initializing if needed). Useful for callers
+	 * that need to pass it to the SoundbankManager for decoding.
+	 */
+	getAudioContext(): AudioContext | null {
+		return this.ctx;
+	}
+
+	/**
 	 * Play a one-shot sample for the given pad index (0-15).
 	 */
 	playSample(padIndex: number): void {
@@ -48,6 +65,55 @@ export class AudioEngine {
 		source.buffer = buffer;
 		source.connect(this.ctx.destination);
 		source.start();
+	}
+
+	/**
+	 * Play a soundbank sample for the given MIDI note.
+	 * Falls back to synthesized tone if the soundbank is not loaded or
+	 * the note is not found.
+	 */
+	playSoundbankNote(slug: string, midiNote: number): void {
+		if (!this.ctx || !this.initialized) return;
+
+		if (this.soundbankManager) {
+			const buffer = this.soundbankManager.findSampleForNote(
+				slug,
+				midiNote
+			);
+			if (buffer) {
+				const source = this.ctx.createBufferSource();
+				source.buffer = buffer;
+				source.connect(this.ctx.destination);
+				source.start();
+				return;
+			}
+		}
+
+		// Fallback to synthesized tone
+		this.playTone(midiNote);
+	}
+
+	/**
+	 * Lazy-load a soundbank by slug. Returns true if loaded successfully.
+	 * Safe to call multiple times — loading is cached.
+	 */
+	async loadSoundbankForBlock(slug: string): Promise<boolean> {
+		if (!this.soundbankManager || !this.ctx) return false;
+
+		const loaded = await this.soundbankManager.loadSoundbank(
+			slug,
+			this.ctx
+		);
+		return loaded !== null;
+	}
+
+	/**
+	 * Get the default octave for a soundbank, or null if not available.
+	 */
+	getSoundbankDefaultOctave(slug: string): number | null {
+		if (!this.soundbankManager) return null;
+		const config = this.soundbankManager.getConfig(slug);
+		return config?.defaultOctave ?? null;
 	}
 
 	/**

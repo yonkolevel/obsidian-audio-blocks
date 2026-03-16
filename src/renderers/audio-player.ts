@@ -11,6 +11,9 @@
  *
  * This processor parses the config and mounts a React AudioPlayer component
  * into the rendered markdown.
+ *
+ * If a soundbank is specified and available, the real .wav sample is played.
+ * Otherwise a synthesized tone is used as a fallback.
  */
 
 import { Plugin } from "obsidian";
@@ -46,6 +49,7 @@ export function registerAudioPlayerProcessor(
 		"audio",
 		(source: string, el: HTMLElement) => {
 			const config = parseSimpleYaml(source);
+			const soundbankSlug = config.soundbank || "";
 
 			const container = el.createDiv({ cls: "ea-block-container" });
 			const root = createRoot(container);
@@ -53,17 +57,37 @@ export function registerAudioPlayerProcessor(
 
 			const sampleIndex = parseInt(config.sampleIndex, 10) || 0;
 
+			// Eagerly start loading the soundbank
+			if (soundbankSlug) {
+				engine
+					.initialize()
+					.then(() => engine.loadSoundbankForBlock(soundbankSlug))
+					.catch(() => {
+						/* fallback to synth */
+					});
+			}
+
 			const handlePlay = async () => {
 				await engine.initialize();
-				// For the prototype, play a synthesized tone since we don't
-				// have real soundbank files. Use MIDI note 60 + sampleIndex
-				// to vary the pitch.
-				engine.playTone(60 + sampleIndex, 0.5);
+
+				if (soundbankSlug) {
+					await engine.loadSoundbankForBlock(soundbankSlug);
+
+					// Compute MIDI note from defaultOctave + sampleIndex
+					const defaultOctave =
+						engine.getSoundbankDefaultOctave(soundbankSlug) ?? 60;
+					const midiNote = defaultOctave + sampleIndex;
+
+					engine.playSoundbankNote(soundbankSlug, midiNote);
+				} else {
+					// Fallback: play a synthesized tone
+					engine.playTone(60 + sampleIndex, 0.5);
+				}
 			};
 
 			root.render(
 				createElement(AudioPlayer, {
-					soundbank: config.soundbank || "default",
+					soundbank: soundbankSlug || "default",
 					sampleIndex,
 					label: config.label || "Play sound",
 					onPlay: handlePlay,

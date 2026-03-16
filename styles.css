@@ -642,10 +642,20 @@
 	color: #FF5C24;
 }
 
+.ea-piano-roll-tempo {
+	font-size: 11px;
+	font-weight: 600;
+	color: rgba(255, 255, 255, 0.5);
+}
+
 .ea-piano-roll-track {
 	font-size: 11px;
 	color: rgba(255, 255, 255, 0.35);
 	margin-left: auto;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 220px;
 }
 
 /* Grid layout: labels + note grid side by side */
