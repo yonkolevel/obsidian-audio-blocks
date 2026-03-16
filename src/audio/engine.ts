@@ -119,25 +119,22 @@ export class AudioEngine {
 				midiNote
 			);
 			if (match) {
-				const source = this.ctx.createBufferSource();
-				source.buffer = match.buffer;
-
-				// Pitch-shift: 2^(semitones/12) gives the playback rate
-				// that transposes from rootNote to the target midiNote.
-				// When rootNote === midiNote, rate is 1.0 (no shift).
 				const semitoneDiff = midiNote - match.rootNote;
-				source.playbackRate.value = Math.pow(
-					2,
-					semitoneDiff / 12
-				);
 
-				source.connect(this.output);
-				source.start();
-				return;
+				// Only use pitch-shifting within ±12 semitones (1 octave).
+				// Beyond that the sample sounds too chipmunky — fall through to synth.
+				if (Math.abs(semitoneDiff) <= 12) {
+					const source = this.ctx.createBufferSource();
+					source.buffer = match.buffer;
+					source.playbackRate.value = Math.pow(2, semitoneDiff / 12);
+					source.connect(this.output);
+					source.start();
+					return;
+				}
 			}
 		}
 
-		// Fallback to synthesized tone (no soundbank loaded)
+		// Fallback to additive piano synth
 		this.playTone(midiNote);
 	}
 
@@ -353,6 +350,13 @@ export class AudioEngine {
 		if (this.soundbankManager) {
 			const match = this.soundbankManager.findNearestSample(slug, midiNote);
 			if (match) {
+				const semitoneDiff = midiNote - match.rootNote;
+
+				// Only use sample within ±12 semitones; beyond that use synth
+				if (Math.abs(semitoneDiff) > 12) {
+					return this.playToneWithRelease(midiNote);
+				}
+
 				// Re-trigger: stop previous instance
 				this.stopNote(midiNote);
 
@@ -361,8 +365,6 @@ export class AudioEngine {
 				const output = ctx.createGain();
 				source.buffer = match.buffer;
 
-				// Pitch-shift to the target note
-				const semitoneDiff = midiNote - match.rootNote;
 				source.playbackRate.value = Math.pow(2, semitoneDiff / 12);
 
 				output.gain.setValueAtTime(1, ctx.currentTime);
