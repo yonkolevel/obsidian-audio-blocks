@@ -131,9 +131,12 @@ export function PianoRoll({
 	const [currentCol, setCurrentCol] = useState(-1);
 	const [metronomeOn, setMetronomeOn] = useState(defaultMetronomeOn ?? false);
 	const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const rafRef = useRef<number | null>(null);
 	const clockStartRef = useRef(0);
 	const tickCountRef = useRef(0);
 	const currentColRef = useRef(-1);
+	/** Continuous playhead position (fractional column) for smooth animation. */
+	const [playheadX, setPlayheadX] = useState(-1);
 
 	// Edit state
 	const [editableNotes, setEditableNotes] = useState<NoteData[] | null>(null);
@@ -399,8 +402,13 @@ export function PianoRoll({
 			clearTimeout(timeoutRef.current);
 			timeoutRef.current = null;
 		}
+		if (rafRef.current) {
+			cancelAnimationFrame(rafRef.current);
+			rafRef.current = null;
+		}
 		setIsPlaying(false);
 		setCurrentCol(-1);
+		setPlayheadX(-1);
 		currentColRef.current = -1;
 	}, []);
 
@@ -408,31 +416,45 @@ export function PianoRoll({
 		if (onRequestExclusivePlayback) onRequestExclusivePlayback(stopPlayback);
 		if (onPlaybackStart) await onPlaybackStart();
 
+		const intervalMs = (60 / tempo / 4) * 1000;
+		const startTime = performance.now();
+		let lastTriggeredCol = -1;
+		clockStartRef.current = startTime;
+		tickCountRef.current = 0;
+
 		setIsPlaying(true);
 		setCurrentCol(0);
 		currentColRef.current = 0;
 		playNotesAtColumn(0);
+		lastTriggeredCol = 0;
 
-		const intervalMs = (60 / tempo / 4) * 1000;
-		const startTime = performance.now();
+		// Audio: clock-corrected setTimeout triggers notes accurately
 		let tickCount = 0;
-		clockStartRef.current = startTime;
-		tickCountRef.current = 0;
-
-		function tick() {
+		function audioTick() {
 			tickCount++;
 			tickCountRef.current = tickCount;
 			const col = tickCount % totalColumns;
 			currentColRef.current = col;
-			setCurrentCol(col);
+			lastTriggeredCol = col;
 			playNotesAtColumn(col);
 
 			const expected = startTime + tickCount * intervalMs;
 			const drift = performance.now() - expected;
 			const nextDelay = Math.max(0, intervalMs - drift);
-			timeoutRef.current = setTimeout(tick, nextDelay);
+			timeoutRef.current = setTimeout(audioTick, nextDelay);
 		}
-		timeoutRef.current = setTimeout(tick, intervalMs);
+		timeoutRef.current = setTimeout(audioTick, intervalMs);
+
+		// Visual: requestAnimationFrame for smooth playhead
+		function animate() {
+			const elapsed = performance.now() - clockStartRef.current;
+			const fracCol = (elapsed / intervalMs) % totalColumns;
+			setPlayheadX(fracCol);
+			// Sync discrete column for note highlight (use last triggered)
+			setCurrentCol(lastTriggeredCol);
+			rafRef.current = requestAnimationFrame(animate);
+		}
+		rafRef.current = requestAnimationFrame(animate);
 	}, [tempo, totalColumns, playNotesAtColumn, onPlaybackStart, onRequestExclusivePlayback, stopPlayback]);
 
 	const handleToggle = useCallback(() => {
@@ -444,34 +466,46 @@ export function PianoRoll({
 	useEffect(() => {
 		if (!isPlaying || !timeoutRef.current) return;
 		clearTimeout(timeoutRef.current);
+		if (rafRef.current) cancelAnimationFrame(rafRef.current);
 
 		const intervalMs = (60 / tempo / 4) * 1000;
 		const startTime = performance.now();
-		// Resume from the current column via ref (avoids stale closure)
+		const resumeCol = currentColRef.current;
 		let tickCount = 0;
+		let lastTriggeredCol = resumeCol;
 		clockStartRef.current = startTime;
 		tickCountRef.current = 0;
 
-		function tick() {
+		function audioTick() {
 			tickCount++;
 			tickCountRef.current = tickCount;
-			const col = (currentColRef.current + tickCount) % totalColumns;
+			const col = (resumeCol + tickCount) % totalColumns;
 			currentColRef.current = col;
-			setCurrentCol(col);
+			lastTriggeredCol = col;
 			playNotesAtColumn(col);
 
 			const expected = startTime + tickCount * intervalMs;
 			const drift = performance.now() - expected;
 			const nextDelay = Math.max(0, intervalMs - drift);
-			timeoutRef.current = setTimeout(tick, nextDelay);
+			timeoutRef.current = setTimeout(audioTick, nextDelay);
 		}
-		timeoutRef.current = setTimeout(tick, intervalMs);
+		timeoutRef.current = setTimeout(audioTick, intervalMs);
+
+		function animate() {
+			const elapsed = performance.now() - clockStartRef.current;
+			const fracCol = (resumeCol + elapsed / intervalMs) % totalColumns;
+			setPlayheadX(fracCol);
+			setCurrentCol(lastTriggeredCol);
+			rafRef.current = requestAnimationFrame(animate);
+		}
+		rafRef.current = requestAnimationFrame(animate);
 	}, [tempo]);
 
 	// Clean up on unmount
 	useEffect(() => {
 		return () => {
 			if (timeoutRef.current) clearTimeout(timeoutRef.current);
+			if (rafRef.current) cancelAnimationFrame(rafRef.current);
 			if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 			if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
 		};
@@ -655,12 +689,12 @@ export function PianoRoll({
 							/>
 						))}
 
-						{/* Playhead */}
-						{isPlaying && currentCol >= 0 && (
+						{/* Playhead — smooth position from rAF */}
+						{isPlaying && playheadX >= 0 && (
 							<div
 								className="ea-piano-roll-playhead"
 								style={{
-									left: `${currentCol * CELL_W}px`,
+									left: `${playheadX * CELL_W}px`,
 									height: `${gridH}px`,
 								}}
 							/>
