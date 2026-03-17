@@ -7,6 +7,7 @@ export interface DrumPadsProps {
 	validation?: "playback" | "interaction";
 	minInteractions?: number;
 	onPadTap: (padIndex: number) => void;
+	onRequestFocus?: (release: () => void) => void;
 }
 
 const PAD_LABELS = [
@@ -70,6 +71,7 @@ export function DrumPads({
 	validation,
 	minInteractions,
 	onPadTap,
+	onRequestFocus,
 }: DrumPadsProps) {
 	const [activePads, setActivePads] = useState<Set<number>>(new Set());
 	const [interactionCount, setInteractionCount] = useState(0);
@@ -174,7 +176,13 @@ export function DrumPads({
 							.join(" ")}
 						onPointerDown={(e) => {
 							e.preventDefault();
-							setKeyboardEnabled((v) => !v);
+							setKeyboardEnabled((prev) => {
+								const next = !prev;
+								if (next && onRequestFocus) {
+									onRequestFocus(() => setKeyboardEnabled(false));
+								}
+								return next;
+							});
 						}}
 						title="Toggle computer keyboard input (1234 / QWER / ASDF / ZXCV = pads)"
 					>

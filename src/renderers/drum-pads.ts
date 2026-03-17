@@ -21,6 +21,7 @@ import { createElement } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { DrumPads } from "../components/DrumPads";
 import { AudioEngine } from "../audio/engine";
+import { FocusManager } from "../audio/focus-manager";
 
 /**
  * Minimal YAML parser for the simple key-value configs we expect.
@@ -57,7 +58,8 @@ function parseNumberArray(value: string | undefined): number[] | undefined {
 
 export function registerDrumPadsProcessor(
 	plugin: Plugin,
-	engine: AudioEngine
+	engine: AudioEngine,
+	focusManager: FocusManager
 ): void {
 	const roots: Root[] = [];
 
@@ -120,6 +122,12 @@ export function registerDrumPadsProcessor(
 						? parseInt(config.minInteractions, 10)
 						: undefined,
 					onPadTap: handlePadTap,
+					onRequestFocus: (release: () => void) => {
+						focusManager.requestFocus(() => {
+							release();
+							engine.stopAllNotes();
+						});
+					},
 				})
 			);
 		}

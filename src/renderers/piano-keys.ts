@@ -22,6 +22,7 @@ import { createElement } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { PianoKeys } from "../components/PianoKeys";
 import { AudioEngine } from "../audio/engine";
+import { FocusManager } from "../audio/focus-manager";
 
 /**
  * Minimal YAML parser for flat key-value configs.
@@ -112,7 +113,8 @@ function parseNoteNames(value: string | undefined): number[] | undefined {
 
 export function registerPianoKeysProcessor(
 	plugin: Plugin,
-	engine: AudioEngine
+	engine: AudioEngine,
+	focusManager: FocusManager
 ): void {
 	const roots: Root[] = [];
 
@@ -185,6 +187,12 @@ export function registerPianoKeysProcessor(
 					expectedScale: parseNoteNames(config.expectedScale),
 					onNoteOn: handleNoteOn,
 					onNoteOff: handleNoteOff,
+					onRequestFocus: (release: () => void) => {
+						focusManager.requestFocus(() => {
+							release();
+							engine.stopAllNotes();
+						});
+					},
 				})
 			);
 		}

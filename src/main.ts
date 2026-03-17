@@ -1,6 +1,7 @@
 import { Plugin, Notice, PluginSettingTab, App, Setting } from "obsidian";
 import { AudioEngine } from "./audio/engine";
 import { SoundbankManager } from "./audio/soundbank-manager";
+import { FocusManager } from "./audio/focus-manager";
 import { registerDrumPadsProcessor } from "./renderers/drum-pads";
 import { registerPianoKeysProcessor } from "./renderers/piano-keys";
 import { registerTransportProcessor } from "./renderers/transport";
@@ -74,6 +75,7 @@ function parseFrontmatter(
 export default class ElementaryAudioPlugin extends Plugin {
 	audioEngine: AudioEngine = new AudioEngine();
 	soundbankManager: SoundbankManager | null = null;
+	focusManager: FocusManager = new FocusManager();
 	settings: ElementaryAudioSettings = DEFAULT_SETTINGS;
 
 	async onload() {
@@ -97,13 +99,25 @@ export default class ElementaryAudioPlugin extends Plugin {
 		this.addSettingTab(new ElementaryAudioSettingTab(this.app, this));
 
 		// Register interactive block processors
-		registerDrumPadsProcessor(this, this.audioEngine);
-		registerPianoKeysProcessor(this, this.audioEngine);
+		registerDrumPadsProcessor(this, this.audioEngine, this.focusManager);
+		registerPianoKeysProcessor(this, this.audioEngine, this.focusManager);
 		registerTransportProcessor(this, this.audioEngine);
 		registerCalloutProcessor(this);
 		registerAudioPlayerProcessor(this, this.audioEngine);
 		registerQuestionProcessor(this);
 		registerPianoRollProcessor(this, this.audioEngine);
+
+		// Release keyboard focus when clicking outside interactive blocks
+		const handleGlobalClick = (e: MouseEvent) => {
+			const target = e.target as HTMLElement;
+			if (!target.closest(".ea-block-container")) {
+				this.focusManager.releaseFocus();
+			}
+		};
+		document.addEventListener("pointerdown", handleGlobalClick);
+		this.register(() =>
+			document.removeEventListener("pointerdown", handleGlobalClick)
+		);
 
 		// Register unknown block type handler for circuit block types
 		// that might be misspelled or not yet implemented

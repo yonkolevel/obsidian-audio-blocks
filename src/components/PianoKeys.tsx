@@ -12,6 +12,8 @@ export interface PianoKeysProps {
 	expectedScale?: number[];
 	onNoteOn: (noteNumber: number) => void;
 	onNoteOff: (noteNumber: number) => void;
+	/** Called when this block activates keyboard mode. */
+	onRequestFocus?: (release: () => void) => void;
 }
 
 interface KeyDef {
@@ -101,6 +103,7 @@ export function PianoKeys({
 	expectedScale,
 	onNoteOn,
 	onNoteOff,
+	onRequestFocus,
 }: PianoKeysProps) {
 	const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
 	const [interactionCount, setInteractionCount] = useState(0);
@@ -367,7 +370,13 @@ export function PianoKeys({
 							.join(" ")}
 						onPointerDown={(e) => {
 							e.preventDefault();
-							setKeyboardEnabled((v) => !v);
+							setKeyboardEnabled((prev) => {
+								const next = !prev;
+								if (next && onRequestFocus) {
+									onRequestFocus(() => setKeyboardEnabled(false));
+								}
+								return next;
+							});
 						}}
 						title="Toggle computer keyboard input (ASDF = notes, Z/X = octave)"
 					>
