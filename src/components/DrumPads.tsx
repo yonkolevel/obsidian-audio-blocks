@@ -6,6 +6,8 @@ export interface DrumPadsProps {
 	highlightedPads?: number[];
 	validation?: "playback" | "interaction";
 	minInteractions?: number;
+	/** When true, the soundbank is still loading — show a subtle indicator. */
+	isLoading?: boolean;
 	onPadTap: (padIndex: number) => void;
 	onRequestFocus?: (release: () => void) => void;
 }
@@ -70,6 +72,7 @@ export function DrumPads({
 	highlightedPads,
 	validation,
 	minInteractions,
+	isLoading,
 	onPadTap,
 	onRequestFocus,
 }: DrumPadsProps) {
@@ -151,8 +154,11 @@ export function DrumPads({
 		interactionCount >= minInteractions;
 
 	return (
-		<div className="ea-drum-pads-container">
+		<div className={`ea-drum-pads-container${isLoading ? " ea-loading" : ""}`}>
 			<div className="ea-drum-pads-header">
+				{isLoading && (
+					<span className="ea-loading-text">Loading sounds...</span>
+				)}
 				{validation === "interaction" && minInteractions !== undefined && (
 					<span
 						className={

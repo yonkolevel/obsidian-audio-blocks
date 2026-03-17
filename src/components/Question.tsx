@@ -23,6 +23,7 @@ export function Question({
 		null
 	);
 	const [answered, setAnswered] = React.useState(false);
+	const [attempt, setAttempt] = React.useState(1);
 
 	const handleSelect = useCallback(
 		(option: string) => {
@@ -33,11 +34,24 @@ export function Question({
 		[answered]
 	);
 
+	const handleRetry = useCallback(() => {
+		setSelectedOption(null);
+		setAnswered(false);
+		setAttempt((prev) => prev + 1);
+	}, []);
+
 	const isCorrect = selectedOption === correctAnswer;
 
 	return (
 		<div className="ea-question-container">
-			<p className="ea-question-text">{question}</p>
+			<div className="ea-question-header">
+				<p className="ea-question-text">{question}</p>
+				{attempt > 1 && (
+					<span className="ea-question-attempt-badge">
+						Attempt {attempt}
+					</span>
+				)}
+			</div>
 			<div className="ea-question-options">
 				{options.map((option, index) => {
 					let stateClass = "";
@@ -88,6 +102,14 @@ export function Question({
 						{explanation}
 					</span>
 				</div>
+			)}
+			{answered && !isCorrect && (
+				<button
+					className="ea-question-retry-btn"
+					onClick={handleRetry}
+				>
+					Try Again
+				</button>
 			)}
 		</div>
 	);

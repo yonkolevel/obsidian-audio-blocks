@@ -130,7 +130,10 @@ export function PianoRoll({
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [currentCol, setCurrentCol] = useState(-1);
 	const [metronomeOn, setMetronomeOn] = useState(defaultMetronomeOn ?? false);
-	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+	const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const clockStartRef = useRef(0);
+	const tickCountRef = useRef(0);
+	const currentColRef = useRef(-1);
 
 	// Edit state
 	const [editableNotes, setEditableNotes] = useState<NoteData[] | null>(null);
@@ -392,12 +395,13 @@ export function PianoRoll({
 	}, []);
 
 	const stopPlayback = useCallback(() => {
-		if (intervalRef.current) {
-			clearInterval(intervalRef.current);
-			intervalRef.current = null;
+		if (timeoutRef.current) {
+			clearTimeout(timeoutRef.current);
+			timeoutRef.current = null;
 		}
 		setIsPlaying(false);
 		setCurrentCol(-1);
+		currentColRef.current = -1;
 	}, []);
 
 	const startPlayback = useCallback(async () => {
@@ -406,15 +410,29 @@ export function PianoRoll({
 
 		setIsPlaying(true);
 		setCurrentCol(0);
+		currentColRef.current = 0;
 		playNotesAtColumn(0);
 
 		const intervalMs = (60 / tempo / 4) * 1000;
-		let col = 0;
-		intervalRef.current = setInterval(() => {
-			col = (col + 1) % totalColumns;
+		const startTime = performance.now();
+		let tickCount = 0;
+		clockStartRef.current = startTime;
+		tickCountRef.current = 0;
+
+		function tick() {
+			tickCount++;
+			tickCountRef.current = tickCount;
+			const col = tickCount % totalColumns;
+			currentColRef.current = col;
 			setCurrentCol(col);
 			playNotesAtColumn(col);
-		}, intervalMs);
+
+			const expected = startTime + tickCount * intervalMs;
+			const drift = performance.now() - expected;
+			const nextDelay = Math.max(0, intervalMs - drift);
+			timeoutRef.current = setTimeout(tick, nextDelay);
+		}
+		timeoutRef.current = setTimeout(tick, intervalMs);
 	}, [tempo, totalColumns, playNotesAtColumn, onPlaybackStart, onRequestExclusivePlayback, stopPlayback]);
 
 	const handleToggle = useCallback(() => {
@@ -424,21 +442,36 @@ export function PianoRoll({
 
 	// Restart playback when tempo changes mid-play
 	useEffect(() => {
-		if (!isPlaying || !intervalRef.current) return;
-		clearInterval(intervalRef.current);
+		if (!isPlaying || !timeoutRef.current) return;
+		clearTimeout(timeoutRef.current);
+
 		const intervalMs = (60 / tempo / 4) * 1000;
-		let col = currentCol;
-		intervalRef.current = setInterval(() => {
-			col = (col + 1) % totalColumns;
+		const startTime = performance.now();
+		// Resume from the current column via ref (avoids stale closure)
+		let tickCount = 0;
+		clockStartRef.current = startTime;
+		tickCountRef.current = 0;
+
+		function tick() {
+			tickCount++;
+			tickCountRef.current = tickCount;
+			const col = (currentColRef.current + tickCount) % totalColumns;
+			currentColRef.current = col;
 			setCurrentCol(col);
 			playNotesAtColumn(col);
-		}, intervalMs);
+
+			const expected = startTime + tickCount * intervalMs;
+			const drift = performance.now() - expected;
+			const nextDelay = Math.max(0, intervalMs - drift);
+			timeoutRef.current = setTimeout(tick, nextDelay);
+		}
+		timeoutRef.current = setTimeout(tick, intervalMs);
 	}, [tempo]);
 
 	// Clean up on unmount
 	useEffect(() => {
 		return () => {
-			if (intervalRef.current) clearInterval(intervalRef.current);
+			if (timeoutRef.current) clearTimeout(timeoutRef.current);
 			if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 			if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
 		};

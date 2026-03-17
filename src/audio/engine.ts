@@ -71,6 +71,23 @@ export class AudioEngine {
 		this.initialized = true;
 	}
 
+	/**
+	 * Synchronous check whether the engine has been initialized.
+	 * Callbacks can use this to avoid awaiting `initialize()` on every tap.
+	 */
+	isInitialized(): boolean {
+		return this.initialized;
+	}
+
+	/**
+	 * Synchronous check whether a soundbank has already been loaded.
+	 * Returns true if the soundbank's samples are cached and ready to play.
+	 */
+	isSoundbankLoaded(slug: string): boolean {
+		if (!this.soundbankManager) return false;
+		return this.soundbankManager.getSoundbank(slug) !== null;
+	}
+
 	/** Get the output node all audio should connect to. */
 	private get output(): AudioNode {
 		return this.masterOut ?? this.ctx!.destination;

@@ -10,6 +10,8 @@ export interface PianoKeysProps {
 	minInteractions?: number;
 	expectedChord?: number[];
 	expectedScale?: number[];
+	/** When true, the soundbank is still loading — show a subtle indicator. */
+	isLoading?: boolean;
 	onNoteOn: (noteNumber: number) => void;
 	onNoteOff: (noteNumber: number) => void;
 	/** Called when this block activates keyboard mode. */
@@ -101,6 +103,7 @@ export function PianoKeys({
 	minInteractions,
 	expectedChord,
 	expectedScale,
+	isLoading,
 	onNoteOn,
 	onNoteOff,
 	onRequestFocus,
@@ -309,8 +312,11 @@ export function PianoKeys({
 			matchedCount >= expectedPitchClasses.length);
 
 	return (
-		<div className="ea-piano-container" ref={containerRef}>
+		<div className={`ea-piano-container${isLoading ? " ea-loading" : ""}`} ref={containerRef}>
 			<div className="ea-piano-header">
+				{isLoading && (
+					<span className="ea-loading-text">Loading sounds...</span>
+				)}
 				{validation === "interaction" && minInteractions !== undefined && (
 					<span
 						className={

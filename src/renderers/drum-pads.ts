@@ -82,54 +82,94 @@ export function registerDrumPadsProcessor(
 			const root = createRoot(container);
 			roots.push(root);
 
-			// Eagerly start loading the soundbank so it's ready by the time
-			// the user taps a pad. This is fire-and-forget.
+			// Track loading state so the component can show a loading indicator
+			let isLoading = true;
+
+			const handlePadTap = (padIndex: number) => {
+				// Fast synchronous path: engine + soundbank already ready
+				if (engine.isInitialized()) {
+					if (soundbankSlug && engine.isSoundbankLoaded(soundbankSlug)) {
+						const defaultOctave =
+							engine.getSoundbankDefaultOctave(soundbankSlug) ?? 24;
+						const midiNote = defaultOctave + padIndex;
+						engine.playSoundbankNote(soundbankSlug, midiNote);
+						return;
+					}
+					if (!soundbankSlug) {
+						engine.playSample(padIndex);
+						return;
+					}
+				}
+
+				// Slow async path: first tap before eager-load completes
+				(async () => {
+					await engine.initialize();
+					if (soundbankSlug) {
+						await engine.loadSoundbankForBlock(soundbankSlug);
+						const defaultOctave =
+							engine.getSoundbankDefaultOctave(soundbankSlug) ?? 24;
+						const midiNote = defaultOctave + padIndex;
+						engine.playSoundbankNote(soundbankSlug, midiNote);
+					} else {
+						engine.playSample(padIndex);
+					}
+					isLoading = false;
+					renderComponent();
+				})();
+			};
+
+			// Helper to re-render the component with current loading state
+			const renderComponent = () => {
+				root.render(
+					createElement(DrumPads, {
+						soundbank: soundbankSlug || "default",
+						hint: config.hint,
+						highlightedPads: parseNumberArray(config.highlightedPads),
+						validation: config.validation === "interaction" ? "interaction" : undefined,
+						minInteractions: config.minInteractions
+							? parseInt(config.minInteractions, 10)
+							: undefined,
+						isLoading,
+						onPadTap: handlePadTap,
+						onRequestFocus: (release: () => void) => {
+							focusManager.requestFocus(() => {
+								release();
+								engine.stopAllNotes();
+							});
+						},
+					})
+				);
+			};
+
+			// Eagerly start loading the soundbank and flip loading state when done
 			if (soundbankSlug) {
 				engine
 					.initialize()
 					.then(() => engine.loadSoundbankForBlock(soundbankSlug))
+					.then(() => {
+						isLoading = false;
+						renderComponent();
+					})
 					.catch(() => {
-						/* fallback to synth */
+						isLoading = false;
+						renderComponent();
+					});
+			} else {
+				// No soundbank to load — just initialize the engine
+				engine
+					.initialize()
+					.then(() => {
+						isLoading = false;
+						renderComponent();
+					})
+					.catch(() => {
+						isLoading = false;
+						renderComponent();
 					});
 			}
 
-			const handlePadTap = async (padIndex: number) => {
-				// Lazy init on first interaction (AudioContext autoplay policy)
-				await engine.initialize();
-
-				if (soundbankSlug) {
-					// Ensure soundbank is loaded
-					await engine.loadSoundbankForBlock(soundbankSlug);
-
-					// Compute MIDI note from defaultOctave + padIndex
-					const defaultOctave =
-						engine.getSoundbankDefaultOctave(soundbankSlug) ?? 24;
-					const midiNote = defaultOctave + padIndex;
-
-					engine.playSoundbankNote(soundbankSlug, midiNote);
-				} else {
-					engine.playSample(padIndex);
-				}
-			};
-
-			root.render(
-				createElement(DrumPads, {
-					soundbank: soundbankSlug || "default",
-					hint: config.hint,
-					highlightedPads: parseNumberArray(config.highlightedPads),
-					validation: config.validation === "interaction" ? "interaction" : undefined,
-					minInteractions: config.minInteractions
-						? parseInt(config.minInteractions, 10)
-						: undefined,
-					onPadTap: handlePadTap,
-					onRequestFocus: (release: () => void) => {
-						focusManager.requestFocus(() => {
-							release();
-							engine.stopAllNotes();
-						});
-					},
-				})
-			);
+			// Initial render with loading state
+			renderComponent();
 		}
 	);
 

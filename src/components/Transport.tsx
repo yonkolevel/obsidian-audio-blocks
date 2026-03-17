@@ -15,15 +15,15 @@ export function Transport({
 }: TransportProps) {
 	const [isPlaying, setIsPlaying] = React.useState(false);
 	const [currentBeat, setCurrentBeat] = React.useState(0);
-	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+	const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	// Parse beats per bar from time signature (e.g. "4/4" -> 4)
 	const beatsPerBar = parseInt(timeSignature.split("/")[0], 10) || 4;
 
 	const stopPlayback = useCallback(() => {
-		if (intervalRef.current) {
-			clearInterval(intervalRef.current);
-			intervalRef.current = null;
+		if (timeoutRef.current) {
+			clearTimeout(timeoutRef.current);
+			timeoutRef.current = null;
 		}
 		setIsPlaying(false);
 		setCurrentBeat(0);
@@ -39,12 +39,22 @@ export function Transport({
 		// Play the first click immediately
 		onPlayClick();
 
-		let beat = 0;
-		intervalRef.current = setInterval(() => {
-			beat = (beat + 1) % beatsPerBar;
+		const startTime = performance.now();
+		let tickCount = 0;
+
+		function tick() {
+			tickCount++;
+			const beat = tickCount % beatsPerBar;
 			setCurrentBeat(beat);
 			onPlayClick();
-		}, intervalMs);
+
+			// Schedule next tick corrected against wall clock
+			const expected = startTime + tickCount * intervalMs;
+			const drift = performance.now() - expected;
+			const nextDelay = Math.max(0, intervalMs - drift);
+			timeoutRef.current = setTimeout(tick, nextDelay);
+		}
+		timeoutRef.current = setTimeout(tick, intervalMs);
 	}, [tempo, beatsPerBar, onPlayClick]);
 
 	const handleToggle = useCallback(() => {
@@ -58,8 +68,8 @@ export function Transport({
 	// Clean up on unmount
 	useEffect(() => {
 		return () => {
-			if (intervalRef.current) {
-				clearInterval(intervalRef.current);
+			if (timeoutRef.current) {
+				clearTimeout(timeoutRef.current);
 			}
 		};
 	}, []);

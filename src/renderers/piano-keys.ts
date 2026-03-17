@@ -137,31 +137,6 @@ export function registerPianoKeysProcessor(
 			const root = createRoot(container);
 			roots.push(root);
 
-			// Eagerly start loading the soundbank
-			if (soundbankSlug) {
-				engine
-					.initialize()
-					.then(() => engine.loadSoundbankForBlock(soundbankSlug))
-					.catch(() => {
-						/* fallback to synth */
-					});
-			}
-
-			const handleNoteOn = async (midiNote: number) => {
-				await engine.initialize();
-
-				if (soundbankSlug) {
-					await engine.loadSoundbankForBlock(soundbankSlug);
-					engine.playSoundbankNoteWithRelease(soundbankSlug, midiNote);
-				} else {
-					engine.playToneWithRelease(midiNote);
-				}
-			};
-
-			const handleNoteOff = (midiNote: number) => {
-				engine.stopNote(midiNote);
-			};
-
 			// Parse validation mode
 			const validationMode = ((): "interaction" | "chord" | "scale" | undefined => {
 				switch (config.validation) {
@@ -172,29 +147,97 @@ export function registerPianoKeysProcessor(
 				}
 			})();
 
-			root.render(
-				createElement(PianoKeys, {
-					soundbank: soundbankSlug || "default",
-					octaves: parseInt(config.octaves, 10) || 1,
-					hint: config.hint,
-					highlightedNotes: parseNumberArray(config.highlightedNotes),
-					highlightColor: config.highlightColor,
-					validation: validationMode,
-					minInteractions: config.minInteractions
-						? parseInt(config.minInteractions, 10)
-						: undefined,
-					expectedChord: parseNoteNames(config.expectedChord),
-					expectedScale: parseNoteNames(config.expectedScale),
-					onNoteOn: handleNoteOn,
-					onNoteOff: handleNoteOff,
-					onRequestFocus: (release: () => void) => {
-						focusManager.requestFocus(() => {
-							release();
-							engine.stopAllNotes();
-						});
-					},
-				})
-			);
+			// Track loading state so the component can show a loading indicator
+			let isLoading = true;
+
+			const handleNoteOn = (midiNote: number) => {
+				// Fast synchronous path: engine + soundbank already ready
+				if (engine.isInitialized()) {
+					if (soundbankSlug && engine.isSoundbankLoaded(soundbankSlug)) {
+						engine.playSoundbankNoteWithRelease(soundbankSlug, midiNote);
+						return;
+					}
+					if (!soundbankSlug) {
+						engine.playToneWithRelease(midiNote);
+						return;
+					}
+				}
+
+				// Slow async path: first tap before eager-load completes
+				(async () => {
+					await engine.initialize();
+					if (soundbankSlug) {
+						await engine.loadSoundbankForBlock(soundbankSlug);
+						engine.playSoundbankNoteWithRelease(soundbankSlug, midiNote);
+					} else {
+						engine.playToneWithRelease(midiNote);
+					}
+					isLoading = false;
+					renderComponent();
+				})();
+			};
+
+			const handleNoteOff = (midiNote: number) => {
+				engine.stopNote(midiNote);
+			};
+
+			// Helper to re-render the component with current loading state
+			const renderComponent = () => {
+				root.render(
+					createElement(PianoKeys, {
+						soundbank: soundbankSlug || "default",
+						octaves: parseInt(config.octaves, 10) || 1,
+						hint: config.hint,
+						highlightedNotes: parseNumberArray(config.highlightedNotes),
+						highlightColor: config.highlightColor,
+						validation: validationMode,
+						minInteractions: config.minInteractions
+							? parseInt(config.minInteractions, 10)
+							: undefined,
+						expectedChord: parseNoteNames(config.expectedChord),
+						expectedScale: parseNoteNames(config.expectedScale),
+						isLoading,
+						onNoteOn: handleNoteOn,
+						onNoteOff: handleNoteOff,
+						onRequestFocus: (release: () => void) => {
+							focusManager.requestFocus(() => {
+								release();
+								engine.stopAllNotes();
+							});
+						},
+					})
+				);
+			};
+
+			// Eagerly start loading the soundbank and flip loading state when done
+			if (soundbankSlug) {
+				engine
+					.initialize()
+					.then(() => engine.loadSoundbankForBlock(soundbankSlug))
+					.then(() => {
+						isLoading = false;
+						renderComponent();
+					})
+					.catch(() => {
+						isLoading = false;
+						renderComponent();
+					});
+			} else {
+				// No soundbank to load — just initialize the engine
+				engine
+					.initialize()
+					.then(() => {
+						isLoading = false;
+						renderComponent();
+					})
+					.catch(() => {
+						isLoading = false;
+						renderComponent();
+					});
+			}
+
+			// Initial render with loading state
+			renderComponent();
 		}
 	);
 
