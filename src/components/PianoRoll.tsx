@@ -136,7 +136,9 @@ export function PianoRoll({
 	const [editableNotes, setEditableNotes] = useState<NoteData[] | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 	const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
-	const [transportActive, setTransportActive] = useState(false);
+	// Ref for synchronous gating — React state updates are async and cause
+	// a timing gap where both transport AND JS onNotePlay fire simultaneously.
+	const transportActiveRef = useRef(false);
 	const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -196,7 +198,7 @@ export function PianoRoll({
 		return () => {
 			if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 			if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
-			if (transportActive) onTransportStop?.();
+			if (transportActiveRef.current) onTransportStop?.();
 		};
 	}, []);
 
@@ -208,22 +210,38 @@ export function PianoRoll({
 			setEditableNotes(notes);
 			setIsDirty(true);
 			// Live-update transport if playing
-			if (transportActive) onTransportNotesUpdate?.(notes);
+			if (transportActiveRef.current) onTransportNotesUpdate?.(notes);
 		},
-		[transportActive, onTransportNotesUpdate]
+		[onTransportNotesUpdate]
 	);
+
+	// Gate onNotePlay synchronously — ref is checked inside the callback
+	// so the kit's useClockTimer never fires notes while transport is active.
+	const handleNotePlay = useCallback(
+		(noteNumber: number, durationBeats?: number) => {
+			if (transportActiveRef.current) return;
+			onNotePlay?.(noteNumber, durationBeats);
+		},
+		[onNotePlay]
+	);
+
+	const handleMetronomeTick = useCallback(() => {
+		if (transportActiveRef.current) return;
+		onMetronomeClick?.();
+	}, [onMetronomeClick]);
 
 	const handlePlaybackStart = useCallback(async () => {
 		if (onRequestExclusivePlayback) {
 			onRequestExclusivePlayback(() => {
-				setTransportActive(false);
+				transportActiveRef.current = false;
 				onTransportStop?.();
 			});
 		}
 		if (onPlaybackStart) await onPlaybackStart();
 
-		// Start transport-driven playback on the audio thread
+		// Set ref BEFORE starting transport — synchronous, no timing gap
 		if (useTransport) {
+			transportActiveRef.current = true;
 			onTransportStart!({
 				notes: activeNotes,
 				soundbankSlug,
@@ -232,7 +250,6 @@ export function PianoRoll({
 				totalSteps,
 				metronomeOn: defaultMetronomeOn ?? false,
 			});
-			setTransportActive(true);
 		}
 	}, [
 		onPlaybackStart, onRequestExclusivePlayback, useTransport,
@@ -241,11 +258,11 @@ export function PianoRoll({
 	]);
 
 	const handlePlaybackStop = useCallback(() => {
-		if (transportActive) {
+		if (transportActiveRef.current) {
+			transportActiveRef.current = false;
 			onTransportStop?.();
-			setTransportActive(false);
 		}
-	}, [transportActive, onTransportStop]);
+	}, [onTransportStop]);
 
 	// ------------------------------------------------------------------
 	// Render
@@ -292,7 +309,7 @@ export function PianoRoll({
 				<span className="ea-piano-roll-track">{trackLabel}</span>
 			</div>
 
-			{/* Kit PianoRoll — onNotePlay only for click-to-preview, not during transport */}
+			{/* Kit PianoRoll — handleNotePlay/handleMetronomeTick gate via ref */}
 			<KitPianoRoll
 				notes={activeNotes}
 				rows={rows}
@@ -301,10 +318,10 @@ export function PianoRoll({
 				defaultTempo={defaultTempo}
 				defaultMetronomeOn={defaultMetronomeOn ?? false}
 				onNotesChange={isEditable ? handleNotesChange : undefined}
-				onNotePlay={transportActive ? undefined : onNotePlay}
+				onNotePlay={handleNotePlay}
 				onPlaybackStart={handlePlaybackStart}
 				onPlaybackStop={handlePlaybackStop}
-				onMetronomeTick={transportActive ? undefined : onMetronomeClick}
+				onMetronomeTick={handleMetronomeTick}
 			/>
 
 			{hint && <p className="ea-piano-roll-hint">{hint}</p>}
