@@ -18,6 +18,11 @@ import {
 	mixTracks,
 	masterOutput,
 	type ChannelStrip,
+	createTransport,
+	clipToPatterns,
+	sequencedDrumSampler,
+	sequencedMelodicSampler,
+	type MelodicSamplerConfig,
 } from "elementary-audio-kit";
 import { ElementaryRenderer } from "./elementary-renderer";
 import { SoundbankManager } from "./soundbank-manager";
@@ -54,6 +59,15 @@ export class AudioEngine {
 
 	// -- Click --
 	private clickGate = 0;
+
+	// -- Transport-driven playback --
+	private transportPlaying = 0;
+	private transportBpm = 120;
+	private transportPatterns: Record<number, number[]> = {};
+	private transportSoundbank: string | null = null;
+	private transportIsDrum = true;
+	private transportMetronome = false;
+	private transportSteps = 16;
 
 	// -- Gate reset scheduling --
 	private gateResets: Map<string, ReturnType<typeof setTimeout>> = new Map();
@@ -326,6 +340,72 @@ export class AudioEngine {
 		);
 	}
 
+	// ===================================================================
+	// Transport-driven playback (audio-thread scheduling)
+	// ===================================================================
+
+	/**
+	 * Start transport-driven playback. Notes are scheduled on the audio
+	 * thread via sequencedDrumSampler/sequencedMelodicSampler — no JS
+	 * timer jitter. Visual playhead syncs separately via useClockTimer.
+	 */
+	startTransportPlayback(config: {
+		notes: { noteNumber: number; velocity: number; position: number; duration: number }[];
+		soundbankSlug: string | null;
+		isDrum: boolean;
+		bpm: number;
+		totalSteps: number;
+		metronomeOn: boolean;
+	}): void {
+		if (!this.initialized) return;
+
+		const clipLengthBeats = config.totalSteps / 4;
+		this.transportPatterns = clipToPatterns(
+			config.notes,
+			config.totalSteps,
+			clipLengthBeats
+		);
+		this.transportSoundbank = config.soundbankSlug;
+		this.transportIsDrum = config.isDrum;
+		this.transportBpm = config.bpm;
+		this.transportSteps = config.totalSteps;
+		this.transportMetronome = config.metronomeOn;
+		this.transportPlaying = 1;
+		this.renderGraph();
+	}
+
+	stopTransportPlayback(): void {
+		this.transportPlaying = 0;
+		this.transportPatterns = {};
+		this.renderGraph();
+	}
+
+	setTransportTempo(bpm: number): void {
+		this.transportBpm = bpm;
+		if (this.transportPlaying) this.renderGraph();
+	}
+
+	setTransportMetronome(on: boolean): void {
+		this.transportMetronome = on;
+		if (this.transportPlaying) this.renderGraph();
+	}
+
+	/**
+	 * Update notes while transport is playing (live editing).
+	 */
+	updateTransportNotes(
+		notes: { noteNumber: number; velocity: number; position: number; duration: number }[]
+	): void {
+		if (!this.transportPlaying) return;
+		const clipLengthBeats = this.transportSteps / 4;
+		this.transportPatterns = clipToPatterns(
+			notes,
+			this.transportSteps,
+			clipLengthBeats
+		);
+		this.renderGraph();
+	}
+
 	dispose(): void {
 		this.stopAllNotes();
 		for (const timer of this.gateResets.values()) {
@@ -452,6 +532,12 @@ export class AudioEngine {
 		// 4. Melodic voices
 		const melodicSignal = this.buildMelodicVoices();
 		tracks.push({ trackId: "melodic", signal: melodicSignal, volume: 0.7 });
+
+		// 5. Transport-driven playback
+		const transportSignal = this.buildTransportGraph();
+		if (transportSignal) {
+			tracks.push({ trackId: "transport", signal: transportSignal, volume: 0.8 });
+		}
 
 		// Mix and master
 		const mix = mixTracks(tracks);
@@ -603,5 +689,100 @@ export class AudioEngine {
 		}
 
 		return { vfsKey: "synth/piano", baseMidi: SYNTH_PIANO_BASE_MIDI };
+	}
+
+	// ===================================================================
+	// Private — transport graph
+	// ===================================================================
+
+	/**
+	 * Build the transport-driven playback graph.
+	 * Uses createTransport for audio-thread clock, and sequenced samplers
+	 * so note timing is sample-accurate (no JS timer jitter).
+	 */
+	private buildTransportGraph(): NodeRepr_t | null {
+		const patternKeys = Object.keys(this.transportPatterns);
+		if (patternKeys.length === 0) return null;
+
+		const bpm = el.const({ key: "transport-bpm", value: this.transportBpm });
+		const playing = el.const({
+			key: "transport-playing",
+			value: this.transportPlaying,
+		});
+		const transport = createTransport({ bpm, playing });
+
+		const signals: NodeRepr_t[] = [];
+
+		// Resolve VFS keys for the soundbank
+		const vfsKeys = this.transportSoundbank
+			? this.soundbankVfsKeys.get(this.transportSoundbank)
+			: null;
+
+		if (this.transportIsDrum || !vfsKeys) {
+			// Drum mode: each note number maps to a separate sample
+			const pads: DrumPadConfig[] = [];
+			for (const noteStr of patternKeys) {
+				const midi = Number(noteStr);
+				const vfsKey = vfsKeys?.get(midi) ?? `kit/${midi}`;
+				pads.push({ vfsKey, midiNumber: midi });
+			}
+
+			if (pads.length > 0) {
+				const sequenced = sequencedDrumSampler(
+					{ trackId: "transport-drum", pads },
+					this.transportPatterns,
+					transport.clock16th
+				);
+				signals.push(sequenced);
+			}
+		} else {
+			// Melodic mode: find nearest sample, pitch-shift
+			// Use the sample closest to middle C as base
+			let baseVfsKey = "synth/piano";
+			let baseMidi = SYNTH_PIANO_BASE_MIDI;
+			let bestDist = Infinity;
+
+			for (const [sampleMidi, vfsKey] of vfsKeys) {
+				const dist = Math.abs(60 - sampleMidi);
+				if (dist < bestDist) {
+					bestDist = dist;
+					baseVfsKey = vfsKey;
+					baseMidi = sampleMidi;
+				}
+			}
+
+			const sequenced = sequencedMelodicSampler(
+				{
+					trackId: "transport-melodic",
+					vfsKey: baseVfsKey,
+					baseMidiNumber: baseMidi,
+				},
+				this.transportPatterns,
+				transport.clock16th
+			);
+			signals.push(sequenced);
+		}
+
+		// Transport metronome: click on quarter-note boundaries
+		if (this.transportMetronome) {
+			const clickSignal = el.sample(
+				{
+					path: "synth/click",
+					mode: "trigger",
+					key: "transport-click",
+				},
+				transport.clock,
+				1
+			);
+			signals.push(el.mul(clickSignal, 0.3));
+		}
+
+		if (signals.length === 0) return null;
+
+		let mix: NodeRepr_t = signals[0]!;
+		for (let i = 1; i < signals.length; i++) {
+			mix = el.add(mix, signals[i]!);
+		}
+		return mix;
 	}
 }

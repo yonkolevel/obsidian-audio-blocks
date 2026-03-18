@@ -22,12 +22,27 @@ export interface PianoRollProps {
 	playgroundData?: PlaygroundData;
 	playgroundPath?: string;
 	onSave?: (trackID: number, notes: NoteData[]) => Promise<void>;
+	/** Play a single note (click-to-preview, not during transport playback). */
 	onNotePlay?: (noteNumber: number, durationBeats?: number) => void;
 	onPlaybackStart?: () => Promise<void>;
 	onRequestExclusivePlayback?: (stopFn: () => void) => void;
 	onMetronomeClick?: () => void;
 	noteNames?: Map<number, string>;
 	defaultMetronomeOn?: boolean;
+
+	// Transport-driven playback callbacks (wired to engine by renderer)
+	onTransportStart?: (config: {
+		notes: NoteData[];
+		soundbankSlug: string | null;
+		isDrum: boolean;
+		bpm: number;
+		totalSteps: number;
+		metronomeOn: boolean;
+	}) => void;
+	onTransportStop?: () => void;
+	onTransportNotesUpdate?: (notes: NoteData[]) => void;
+	onTransportTempoChange?: (bpm: number) => void;
+	onTransportMetronomeChange?: (on: boolean) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +116,11 @@ export function PianoRoll({
 	onRequestExclusivePlayback,
 	onMetronomeClick,
 	noteNames,
+	onTransportStart,
+	onTransportStop,
+	onTransportNotesUpdate,
+	onTransportTempoChange,
+	onTransportMetronomeChange,
 }: PianoRollProps) {
 	// Resolve track and clip from playground data
 	const track = playgroundData?.tracks.find((t) => t.id === trackID);
@@ -108,14 +128,17 @@ export function PianoRoll({
 	const isDrum = track ? track.type === "drum" : true;
 	const isEditable = !!playgroundPath && !!onSave;
 	const hasPlaygroundData = !!(track && clip);
+	const soundbankSlug = track?.soundbankSlug || null;
+
+	const useTransport = !!onTransportStart;
 
 	// Edit state
 	const [editableNotes, setEditableNotes] = useState<NoteData[] | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 	const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+	const [transportActive, setTransportActive] = useState(false);
 	const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const stopPlaybackRef = useRef<(() => void) | null>(null);
 
 	// Initialize editable notes from clip data
 	useEffect(() => {
@@ -138,6 +161,8 @@ export function PianoRoll({
 	);
 
 	const lengthInBars = clip ? clip.lengthInBars : 1;
+	const totalSteps = lengthInBars * 16;
+	const defaultTempo = playgroundData?.tempo ?? 120;
 
 	// ------------------------------------------------------------------
 	// Auto-save
@@ -171,6 +196,7 @@ export function PianoRoll({
 		return () => {
 			if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 			if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+			if (transportActive) onTransportStop?.();
 		};
 	}, []);
 
@@ -181,16 +207,45 @@ export function PianoRoll({
 		(notes: NoteData[]) => {
 			setEditableNotes(notes);
 			setIsDirty(true);
+			// Live-update transport if playing
+			if (transportActive) onTransportNotesUpdate?.(notes);
 		},
-		[]
+		[transportActive, onTransportNotesUpdate]
 	);
 
 	const handlePlaybackStart = useCallback(async () => {
-		if (onRequestExclusivePlayback && stopPlaybackRef.current) {
-			onRequestExclusivePlayback(stopPlaybackRef.current);
+		if (onRequestExclusivePlayback) {
+			onRequestExclusivePlayback(() => {
+				setTransportActive(false);
+				onTransportStop?.();
+			});
 		}
 		if (onPlaybackStart) await onPlaybackStart();
-	}, [onPlaybackStart, onRequestExclusivePlayback]);
+
+		// Start transport-driven playback on the audio thread
+		if (useTransport) {
+			onTransportStart!({
+				notes: activeNotes,
+				soundbankSlug,
+				isDrum,
+				bpm: defaultTempo,
+				totalSteps,
+				metronomeOn: defaultMetronomeOn ?? false,
+			});
+			setTransportActive(true);
+		}
+	}, [
+		onPlaybackStart, onRequestExclusivePlayback, useTransport,
+		onTransportStart, onTransportStop, activeNotes, soundbankSlug,
+		isDrum, defaultTempo, totalSteps, defaultMetronomeOn,
+	]);
+
+	const handlePlaybackStop = useCallback(() => {
+		if (transportActive) {
+			onTransportStop?.();
+			setTransportActive(false);
+		}
+	}, [transportActive, onTransportStop]);
 
 	// ------------------------------------------------------------------
 	// Render
@@ -237,18 +292,19 @@ export function PianoRoll({
 				<span className="ea-piano-roll-track">{trackLabel}</span>
 			</div>
 
-			{/* Kit PianoRoll */}
+			{/* Kit PianoRoll — onNotePlay only for click-to-preview, not during transport */}
 			<KitPianoRoll
 				notes={activeNotes}
 				rows={rows}
 				lengthInBars={lengthInBars}
 				editable={isEditable}
-				defaultTempo={playgroundData?.tempo ?? 120}
+				defaultTempo={defaultTempo}
 				defaultMetronomeOn={defaultMetronomeOn ?? false}
 				onNotesChange={isEditable ? handleNotesChange : undefined}
-				onNotePlay={onNotePlay}
+				onNotePlay={transportActive ? undefined : onNotePlay}
 				onPlaybackStart={handlePlaybackStart}
-				onMetronomeTick={onMetronomeClick}
+				onPlaybackStop={handlePlaybackStop}
+				onMetronomeTick={transportActive ? undefined : onMetronomeClick}
 			/>
 
 			{hint && <p className="ea-piano-roll-hint">{hint}</p>}

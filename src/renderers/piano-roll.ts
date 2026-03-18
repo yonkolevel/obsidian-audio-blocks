@@ -206,6 +206,17 @@ export function registerPianoRollProcessor(
 					onRequestExclusivePlayback: requestExclusivePlayback,
 					onMetronomeClick: handleMetronomeClick,
 					noteNames,
+					// Transport-driven playback (audio-thread scheduling)
+					onTransportStart: (transportConfig: any) =>
+						engine.startTransportPlayback(transportConfig),
+					onTransportStop: () =>
+						engine.stopTransportPlayback(),
+					onTransportNotesUpdate: (notes: NoteData[]) =>
+						engine.updateTransportNotes(notes),
+					onTransportTempoChange: (bpm: number) =>
+						engine.setTransportTempo(bpm),
+					onTransportMetronomeChange: (on: boolean) =>
+						engine.setTransportMetronome(on),
 				})
 			);
 		}
