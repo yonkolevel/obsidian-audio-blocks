@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+	PianoRoll as KitPianoRoll,
+	type NoteData,
+	type RowConfig,
+} from "elementary-audio-kit/ui";
+import {
 	PlaygroundData,
-	TrackData,
-	ClipData,
-	NoteData,
 	drumNoteName,
 	melodicNoteName,
 } from "../playground/reader";
@@ -29,35 +31,23 @@ export interface PianoRollProps {
 }
 
 // ---------------------------------------------------------------------------
-// Constants
+// Helpers
 // ---------------------------------------------------------------------------
 
-const CELL_W = 28; // px per 16th-note column
-const CELL_H = 28; // px per row
-const DRAG_THRESHOLD = 3; // px before drag starts
-const RESIZE_HANDLE_W = 8; // px width of right-edge resize handle
-const MIN_NOTE_DURATION = 0.25; // 1 sixteenth note
-
-/** Default drum rows shown when there is no playground data. */
-const DEFAULT_DRUM_ROWS: RowInfo[] = [
+const DEFAULT_DRUM_ROWS: RowConfig[] = [
 	{ noteNumber: 36, label: "Kick" },
 	{ noteNumber: 38, label: "Snare" },
 	{ noteNumber: 42, label: "Hi-Hat Closed" },
 	{ noteNumber: 51, label: "Ride" },
 ];
 
-const PLACEHOLDER_COLUMNS = 16;
-
 const PREFILLED_NOTES: NoteData[] = [
-	// Kick: 4-on-the-floor
 	{ noteNumber: 36, velocity: 110, position: 0, duration: 0.25 },
 	{ noteNumber: 36, velocity: 110, position: 1, duration: 0.25 },
 	{ noteNumber: 36, velocity: 110, position: 2, duration: 0.25 },
 	{ noteNumber: 36, velocity: 110, position: 3, duration: 0.25 },
-	// Snare: beats 2 and 4
 	{ noteNumber: 38, velocity: 110, position: 1, duration: 0.25 },
 	{ noteNumber: 38, velocity: 110, position: 3, duration: 0.25 },
-	// Hi-Hat: every other 16th
 	{ noteNumber: 42, velocity: 100, position: 0, duration: 0.25 },
 	{ noteNumber: 42, velocity: 100, position: 0.5, duration: 0.25 },
 	{ noteNumber: 42, velocity: 100, position: 1, duration: 0.25 },
@@ -66,21 +56,11 @@ const PREFILLED_NOTES: NoteData[] = [
 	{ noteNumber: 42, velocity: 100, position: 2.5, duration: 0.25 },
 	{ noteNumber: 42, velocity: 100, position: 3, duration: 0.25 },
 	{ noteNumber: 42, velocity: 100, position: 3.5, duration: 0.25 },
-	// Ride: off-beats
 	{ noteNumber: 51, velocity: 100, position: 0.5, duration: 0.25 },
 	{ noteNumber: 51, velocity: 100, position: 1.5, duration: 0.25 },
 	{ noteNumber: 51, velocity: 100, position: 2.5, duration: 0.25 },
 	{ noteNumber: 51, velocity: 100, position: 3.5, duration: 0.25 },
 ];
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-interface RowInfo {
-	noteNumber: number;
-	label: string;
-}
 
 function resolveNoteLabel(
 	nn: number,
@@ -94,18 +74,13 @@ function buildRows(
 	notes: NoteData[],
 	isDrum: boolean,
 	noteNames?: Map<number, string>
-): RowInfo[] {
+): RowConfig[] {
 	const noteNumbers = new Set(notes.map((n) => n.noteNumber));
 	const sorted = Array.from(noteNumbers).sort((a, b) => a - b);
 	return sorted.map((nn) => ({
 		noteNumber: nn,
 		label: resolveNoteLabel(nn, isDrum, noteNames),
 	}));
-}
-
-/** Snap a beat value to the nearest 16th note. */
-function snap16(value: number): number {
-	return Math.round(value * 4) / 4;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,16 +102,12 @@ export function PianoRoll({
 	onMetronomeClick,
 	noteNames,
 }: PianoRollProps) {
-	const [isPlaying, setIsPlaying] = useState(false);
-	const [currentCol, setCurrentCol] = useState(-1);
-	const [metronomeOn, setMetronomeOn] = useState(defaultMetronomeOn ?? false);
-	const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const rafRef = useRef<number | null>(null);
-	const clockStartRef = useRef(0);
-	const tickCountRef = useRef(0);
-	const currentColRef = useRef(-1);
-	/** Continuous playhead position (fractional column) for smooth animation. */
-	const [playheadX, setPlayheadX] = useState(-1);
+	// Resolve track and clip from playground data
+	const track = playgroundData?.tracks.find((t) => t.id === trackID);
+	const clip = track?.clips[0];
+	const isDrum = track ? track.type === "drum" : true;
+	const isEditable = !!playgroundPath && !!onSave;
+	const hasPlaygroundData = !!(track && clip);
 
 	// Edit state
 	const [editableNotes, setEditableNotes] = useState<NoteData[] | null>(null);
@@ -144,31 +115,7 @@ export function PianoRoll({
 	const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 	const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-	// Drag state
-	const [dragState, setDragState] = useState<{
-		noteIdx: number;
-		mode: "move" | "resize";
-		startX: number;
-		startY: number;
-		origPosition: number;
-		origDuration: number;
-		origNoteNumber: number;
-		deltaBeats: number;
-		deltaRows: number;
-		committed: boolean; // has pointer moved past threshold?
-	} | null>(null);
-
-	// Resolve track and clip
-	const track = playgroundData?.tracks.find((t) => t.id === trackID);
-	const clip = track?.clips[0];
-	const isDrum = track ? track.type === "drum" : true;
-	const isEditable = !!playgroundPath && !!onSave;
-	const hasPlaygroundData = !!(track && clip);
-
-	// Total columns (in 16th notes)
-	const totalColumns = clip ? clip.lengthInBars * 16 : PLACEHOLDER_COLUMNS;
-	const totalBeats = totalColumns / 4;
+	const stopPlaybackRef = useRef<(() => void) | null>(null);
 
 	// Initialize editable notes from clip data
 	useEffect(() => {
@@ -184,22 +131,13 @@ export function PianoRoll({
 		return isEditable && editableNotes !== null ? editableNotes : clip?.notes ?? [];
 	}, [hasPlaygroundData, isEditable, editableNotes, clip]);
 
-	// Build rows from notes
+	// Build rows
 	const rows = useMemo(
 		() => (hasPlaygroundData ? buildRows(activeNotes, isDrum, noteNames) : DEFAULT_DRUM_ROWS),
 		[hasPlaygroundData, activeNotes, isDrum, noteNames]
 	);
 
-	// Row index lookup: noteNumber → rowIndex
-	const noteToRow = useMemo(() => {
-		const map = new Map<number, number>();
-		rows.forEach((r, i) => map.set(r.noteNumber, i));
-		return map;
-	}, [rows]);
-
-	const [tempo, setTempo] = useState(playgroundData?.tempo ?? 120);
-	const gridW = totalColumns * CELL_W;
-	const gridH = rows.length * CELL_H;
+	const lengthInBars = clip ? clip.lengthInBars : 1;
 
 	// ------------------------------------------------------------------
 	// Auto-save
@@ -228,291 +166,34 @@ export function PianoRoll({
 		};
 	}, [isDirty, isEditable, performSave]);
 
-	// ------------------------------------------------------------------
-	// Grid click: create note on empty area
-	// ------------------------------------------------------------------
-	const gridRef = useRef<HTMLDivElement>(null);
-
-	const handleGridClick = useCallback(
-		(e: React.PointerEvent) => {
-			if (!isEditable || dragState?.committed) return;
-			const rect = gridRef.current?.getBoundingClientRect();
-			if (!rect) return;
-			const x = e.clientX - rect.left;
-			const y = e.clientY - rect.top;
-			const colIdx = Math.floor(x / CELL_W);
-			const rowIdx = Math.floor(y / CELL_H);
-			if (rowIdx < 0 || rowIdx >= rows.length) return;
-			if (colIdx < 0 || colIdx >= totalColumns) return;
-
-			const row = rows[rowIdx];
-			const position = colIdx / 4;
-			const duration = 0.25;
-
-			// Check if a note already exists at this position
-			const existing = activeNotes.findIndex(
-				(n) =>
-					n.noteNumber === row.noteNumber &&
-					position >= n.position &&
-					position < n.position + n.duration
-			);
-			if (existing >= 0) return; // Clicking a note is handled by note pointer events
-
-			if (onNotePlay) onNotePlay(row.noteNumber);
-			setEditableNotes((prev) => [
-				...(prev ?? []),
-				{ noteNumber: row.noteNumber, velocity: 110, position, duration },
-			]);
-			setIsDirty(true);
-		},
-		[isEditable, rows, totalColumns, activeNotes, onNotePlay, dragState]
-	);
-
-	// ------------------------------------------------------------------
-	// Note click: delete
-	// ------------------------------------------------------------------
-	const handleNoteClick = useCallback(
-		(noteIdx: number) => {
-			if (!isEditable) return;
-			setEditableNotes((prev) => (prev ?? []).filter((_, i) => i !== noteIdx));
-			setIsDirty(true);
-		},
-		[isEditable]
-	);
-
-	// ------------------------------------------------------------------
-	// Note drag: move / resize
-	// ------------------------------------------------------------------
-	const handleNotePointerDown = useCallback(
-		(e: React.PointerEvent, noteIdx: number, mode: "move" | "resize") => {
-			if (!isEditable) return;
-			e.preventDefault();
-			e.stopPropagation();
-			const note = activeNotes[noteIdx];
-			if (!note) return;
-
-			setDragState({
-				noteIdx,
-				mode,
-				startX: e.clientX,
-				startY: e.clientY,
-				origPosition: note.position,
-				origDuration: note.duration,
-				origNoteNumber: note.noteNumber,
-				deltaBeats: 0,
-				deltaRows: 0,
-				committed: false,
-			});
-
-			(e.target as HTMLElement).setPointerCapture(e.pointerId);
-		},
-		[isEditable, activeNotes]
-	);
-
-	const handlePointerMove = useCallback(
-		(e: React.PointerEvent) => {
-			if (!dragState) return;
-			const dx = e.clientX - dragState.startX;
-			const dy = e.clientY - dragState.startY;
-			const dist = Math.sqrt(dx * dx + dy * dy);
-			const committed = dragState.committed || dist > DRAG_THRESHOLD;
-			const deltaBeats = snap16(dx / CELL_W / 4);
-			const deltaRows = Math.round(dy / CELL_H);
-
-			setDragState((prev) =>
-				prev ? { ...prev, deltaBeats, deltaRows, committed } : null
-			);
-		},
-		[dragState]
-	);
-
-	const handlePointerUp = useCallback(
-		(e: React.PointerEvent) => {
-			if (!dragState) return;
-			(e.target as HTMLElement).releasePointerCapture(e.pointerId);
-
-			if (!dragState.committed) {
-				// Was a click, not a drag — delete the note
-				handleNoteClick(dragState.noteIdx);
-				setDragState(null);
-				return;
-			}
-
-			// Commit the drag
-			setEditableNotes((prev) => {
-				if (!prev) return prev;
-				const updated = [...prev];
-				const note = { ...updated[dragState.noteIdx] };
-
-				if (dragState.mode === "move") {
-					let newPos = snap16(dragState.origPosition + dragState.deltaBeats);
-					newPos = Math.max(0, Math.min(newPos, totalBeats - note.duration));
-
-					// Calculate new note number from row shift
-					const origRow = noteToRow.get(dragState.origNoteNumber) ?? 0;
-					let newRow = origRow + dragState.deltaRows;
-					newRow = Math.max(0, Math.min(newRow, rows.length - 1));
-					note.noteNumber = rows[newRow].noteNumber;
-					note.position = newPos;
-				} else {
-					// resize
-					let newDur = snap16(dragState.origDuration + dragState.deltaBeats);
-					newDur = Math.max(MIN_NOTE_DURATION, newDur);
-					// Don't extend past end
-					newDur = Math.min(newDur, totalBeats - note.position);
-					note.duration = newDur;
-				}
-
-				updated[dragState.noteIdx] = note;
-				return updated;
-			});
-			setIsDirty(true);
-			setDragState(null);
-		},
-		[dragState, handleNoteClick, totalBeats, noteToRow, rows]
-	);
-
-	// ------------------------------------------------------------------
-	// Playback
-	// ------------------------------------------------------------------
-	const activeNotesRef = useRef(activeNotes);
-	activeNotesRef.current = activeNotes;
-	const onNotePlayRef = useRef(onNotePlay);
-	onNotePlayRef.current = onNotePlay;
-	const metronomeOnRef = useRef(metronomeOn);
-	metronomeOnRef.current = metronomeOn;
-	const onMetronomeClickRef = useRef(onMetronomeClick);
-	onMetronomeClickRef.current = onMetronomeClick;
-
-	const playNotesAtColumn = useCallback((col: number) => {
-		if (metronomeOnRef.current && col % 4 === 0 && onMetronomeClickRef.current) {
-			onMetronomeClickRef.current();
-		}
-		const play = onNotePlayRef.current;
-		if (!play) return;
-		const notes = activeNotesRef.current;
-		for (const n of notes) {
-			const noteCol = Math.round(n.position * 4);
-			if (noteCol === col) play(n.noteNumber, n.duration);
-		}
-	}, []);
-
-	const stopPlayback = useCallback(() => {
-		if (timeoutRef.current) {
-			clearTimeout(timeoutRef.current);
-			timeoutRef.current = null;
-		}
-		if (rafRef.current) {
-			cancelAnimationFrame(rafRef.current);
-			rafRef.current = null;
-		}
-		setIsPlaying(false);
-		setCurrentCol(-1);
-		setPlayheadX(-1);
-		currentColRef.current = -1;
-	}, []);
-
-	const startPlayback = useCallback(async () => {
-		if (onRequestExclusivePlayback) onRequestExclusivePlayback(stopPlayback);
-		if (onPlaybackStart) await onPlaybackStart();
-
-		const intervalMs = (60 / tempo / 4) * 1000;
-		const startTime = performance.now();
-		let lastTriggeredCol = -1;
-		clockStartRef.current = startTime;
-		tickCountRef.current = 0;
-
-		setIsPlaying(true);
-		setCurrentCol(0);
-		currentColRef.current = 0;
-		playNotesAtColumn(0);
-		lastTriggeredCol = 0;
-
-		// Audio: clock-corrected setTimeout triggers notes accurately
-		let tickCount = 0;
-		function audioTick() {
-			tickCount++;
-			tickCountRef.current = tickCount;
-			const col = tickCount % totalColumns;
-			currentColRef.current = col;
-			lastTriggeredCol = col;
-			playNotesAtColumn(col);
-
-			const expected = startTime + tickCount * intervalMs;
-			const drift = performance.now() - expected;
-			const nextDelay = Math.max(0, intervalMs - drift);
-			timeoutRef.current = setTimeout(audioTick, nextDelay);
-		}
-		timeoutRef.current = setTimeout(audioTick, intervalMs);
-
-		// Visual: requestAnimationFrame for smooth playhead
-		function animate() {
-			const elapsed = performance.now() - clockStartRef.current;
-			const fracCol = (elapsed / intervalMs) % totalColumns;
-			setPlayheadX(fracCol);
-			// Sync discrete column for note highlight (use last triggered)
-			setCurrentCol(lastTriggeredCol);
-			rafRef.current = requestAnimationFrame(animate);
-		}
-		rafRef.current = requestAnimationFrame(animate);
-	}, [tempo, totalColumns, playNotesAtColumn, onPlaybackStart, onRequestExclusivePlayback, stopPlayback]);
-
-	const handleToggle = useCallback(() => {
-		if (isPlaying) stopPlayback();
-		else startPlayback();
-	}, [isPlaying, startPlayback, stopPlayback]);
-
-	// Restart playback when tempo changes mid-play
-	useEffect(() => {
-		if (!isPlaying || !timeoutRef.current) return;
-		clearTimeout(timeoutRef.current);
-		if (rafRef.current) cancelAnimationFrame(rafRef.current);
-
-		const intervalMs = (60 / tempo / 4) * 1000;
-		const startTime = performance.now();
-		const resumeCol = currentColRef.current;
-		let tickCount = 0;
-		let lastTriggeredCol = resumeCol;
-		clockStartRef.current = startTime;
-		tickCountRef.current = 0;
-
-		function audioTick() {
-			tickCount++;
-			tickCountRef.current = tickCount;
-			const col = (resumeCol + tickCount) % totalColumns;
-			currentColRef.current = col;
-			lastTriggeredCol = col;
-			playNotesAtColumn(col);
-
-			const expected = startTime + tickCount * intervalMs;
-			const drift = performance.now() - expected;
-			const nextDelay = Math.max(0, intervalMs - drift);
-			timeoutRef.current = setTimeout(audioTick, nextDelay);
-		}
-		timeoutRef.current = setTimeout(audioTick, intervalMs);
-
-		function animate() {
-			const elapsed = performance.now() - clockStartRef.current;
-			const fracCol = (resumeCol + elapsed / intervalMs) % totalColumns;
-			setPlayheadX(fracCol);
-			setCurrentCol(lastTriggeredCol);
-			rafRef.current = requestAnimationFrame(animate);
-		}
-		rafRef.current = requestAnimationFrame(animate);
-	}, [tempo]);
-
 	// Clean up on unmount
 	useEffect(() => {
 		return () => {
-			if (timeoutRef.current) clearTimeout(timeoutRef.current);
-			if (rafRef.current) cancelAnimationFrame(rafRef.current);
 			if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 			if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
 		};
 	}, []);
 
 	// ------------------------------------------------------------------
-	// Render helpers
+	// Callbacks
+	// ------------------------------------------------------------------
+	const handleNotesChange = useCallback(
+		(notes: NoteData[]) => {
+			setEditableNotes(notes);
+			setIsDirty(true);
+		},
+		[]
+	);
+
+	const handlePlaybackStart = useCallback(async () => {
+		if (onRequestExclusivePlayback && stopPlaybackRef.current) {
+			onRequestExclusivePlayback(stopPlaybackRef.current);
+		}
+		if (onPlaybackStart) await onPlaybackStart();
+	}, [onPlaybackStart, onRequestExclusivePlayback]);
+
+	// ------------------------------------------------------------------
+	// Render
 	// ------------------------------------------------------------------
 	const badgeLabel = validation === "playback" ? "Listen" : "Play along";
 	const badgeClass =
@@ -521,97 +202,11 @@ export function PianoRoll({
 		? `${track.title}${track.soundbankSlug ? ` \u2014 ${track.soundbankSlug}` : ""}`
 		: `Track ${trackID}`;
 
-	/** Compute visual position for a note, applying drag offset if active. */
-	function noteStyle(note: NoteData, noteIdx: number): React.CSSProperties {
-		const rowIdx = noteToRow.get(note.noteNumber) ?? 0;
-		let left = note.position * 4 * CELL_W;
-		let top = rowIdx * CELL_H;
-		let width = note.duration * 4 * CELL_W;
-
-		if (dragState && dragState.noteIdx === noteIdx && dragState.committed) {
-			if (dragState.mode === "move") {
-				left = (dragState.origPosition + dragState.deltaBeats) * 4 * CELL_W;
-				const origRow = noteToRow.get(dragState.origNoteNumber) ?? 0;
-				top = (origRow + dragState.deltaRows) * CELL_H;
-			} else {
-				width = (dragState.origDuration + dragState.deltaBeats) * 4 * CELL_W;
-				width = Math.max(CELL_W, width);
-			}
-		}
-
-		return {
-			position: "absolute",
-			left: `${left}px`,
-			top: `${top + 2}px`,
-			width: `${width - 2}px`,
-			height: `${CELL_H - 4}px`,
-		};
-	}
-
-	// Build beat lines array
-	const beatLines = useMemo(() => {
-		const lines: number[] = [];
-		for (let i = 0; i <= totalColumns; i++) {
-			if (i % 4 === 0) lines.push(i);
-		}
-		return lines;
-	}, [totalColumns]);
-
 	return (
 		<div className="ea-piano-roll-container">
-			{/* Header */}
-			<div className="ea-piano-roll-header">
-				<button
-					className={[
-						"ea-piano-roll-play-btn",
-						isPlaying ? "ea-piano-roll-play-btn--playing" : "",
-					]
-						.filter(Boolean)
-						.join(" ")}
-					onPointerDown={(e) => {
-						e.preventDefault();
-						handleToggle();
-					}}
-				>
-					{isPlaying ? "\u25A0" : "\u25B6"}
-				</button>
+			{/* Obsidian-specific header chrome */}
+			<div className="ea-piano-roll-header" style={{ marginBottom: 8 }}>
 				<span className={`ea-piano-roll-badge ${badgeClass}`}>{badgeLabel}</span>
-				<div className="ea-piano-roll-tempo-controls">
-					<button
-						className="ea-piano-roll-tempo-btn"
-						onPointerDown={(e) => {
-							e.preventDefault();
-							setTempo((t) => Math.max(20, t - 5));
-						}}
-					>
-						-
-					</button>
-					<span className="ea-piano-roll-tempo">{tempo} BPM</span>
-					<button
-						className="ea-piano-roll-tempo-btn"
-						onPointerDown={(e) => {
-							e.preventDefault();
-							setTempo((t) => Math.min(300, t + 5));
-						}}
-					>
-						+
-					</button>
-				</div>
-				<button
-					className={[
-						"ea-piano-roll-metronome-btn",
-						metronomeOn ? "ea-piano-roll-metronome-btn--active" : "",
-					]
-						.filter(Boolean)
-						.join(" ")}
-					onPointerDown={(e) => {
-						e.preventDefault();
-						setMetronomeOn((v) => !v);
-					}}
-					title="Toggle metronome"
-				>
-					{metronomeOn ? "\u{1F514}" : "\u{1F515}"}
-				</button>
 
 				{isEditable && (
 					<div className="ea-piano-roll-save-area">
@@ -642,121 +237,19 @@ export function PianoRoll({
 				<span className="ea-piano-roll-track">{trackLabel}</span>
 			</div>
 
-			{/* Grid area */}
-			<div className="ea-piano-roll-grid-wrapper">
-				{/* Row labels */}
-				<div className="ea-piano-roll-labels">
-					{rows.map((row, i) => (
-						<div
-							key={i}
-							className="ea-piano-roll-label"
-							style={{ height: `${CELL_H}px` }}
-						>
-							{row.label}
-						</div>
-					))}
-				</div>
-
-				{/* Scrollable grid */}
-				<div className="ea-piano-roll-scroll">
-					<div
-						ref={gridRef}
-						className="ea-piano-roll-grid"
-						style={{ width: `${gridW}px`, height: `${gridH}px` }}
-						onPointerDown={isEditable ? handleGridClick : undefined}
-						onPointerMove={dragState ? handlePointerMove : undefined}
-						onPointerUp={dragState ? handlePointerUp : undefined}
-					>
-						{/* Row backgrounds */}
-						{rows.map((_, i) => (
-							<div
-								key={`row-${i}`}
-								className="ea-piano-roll-row-bg"
-								style={{
-									top: `${i * CELL_H}px`,
-									width: `${gridW}px`,
-									height: `${CELL_H}px`,
-								}}
-							/>
-						))}
-
-						{/* Beat lines */}
-						{beatLines.map((col) => (
-							<div
-								key={`beat-${col}`}
-								className="ea-piano-roll-beat-line"
-								style={{ left: `${col * CELL_W}px`, height: `${gridH}px` }}
-							/>
-						))}
-
-						{/* Playhead — smooth position from rAF */}
-						{isPlaying && playheadX >= 0 && (
-							<div
-								className="ea-piano-roll-playhead"
-								style={{
-									left: `${playheadX * CELL_W}px`,
-									height: `${gridH}px`,
-								}}
-							/>
-						)}
-
-						{/* Notes */}
-						{activeNotes.map((note, idx) => {
-							const isDragging =
-								dragState?.noteIdx === idx && dragState.committed;
-							const noteStartCol = Math.round(note.position * 4);
-							const noteEndCol = Math.round((note.position + note.duration) * 4);
-							const isNoteActive =
-								isPlaying &&
-								currentCol >= 0 &&
-								currentCol >= noteStartCol &&
-								currentCol < noteEndCol;
-							const showLabel = note.duration >= 0.75;
-							return (
-								<div
-									key={idx}
-									className={[
-										"ea-piano-roll-note",
-										isDragging ? "ea-piano-roll-note--dragging" : "",
-										isEditable ? "ea-piano-roll-note--editable" : "",
-										isNoteActive ? "ea-piano-roll-note--playing" : "",
-									]
-										.filter(Boolean)
-										.join(" ")}
-									style={noteStyle(note, idx)}
-									onPointerDown={
-										isEditable
-											? (e) => handleNotePointerDown(e, idx, "move")
-											: undefined
-									}
-								>
-									{showLabel && (
-										<span className="ea-piano-roll-note-label">
-											{resolveNoteLabel(note.noteNumber, isDrum, noteNames)}
-										</span>
-									)}
-									{/* Resize handle on right edge */}
-									{isEditable && (
-										<div
-											className="ea-piano-roll-resize-handle"
-											onPointerDown={
-												isEditable
-													? (e) =>
-															handleNotePointerDown(
-																e,
-																idx,
-																"resize"
-															)
-													: undefined
-											}
-										/>
-									)}
-								</div>
-							);
-						})}
-					</div>
-				</div>
-			</div>
+			{/* Kit PianoRoll */}
+			<KitPianoRoll
+				notes={activeNotes}
+				rows={rows}
+				lengthInBars={lengthInBars}
+				editable={isEditable}
+				defaultTempo={playgroundData?.tempo ?? 120}
+				defaultMetronomeOn={defaultMetronomeOn ?? false}
+				onNotesChange={isEditable ? handleNotesChange : undefined}
+				onNotePlay={onNotePlay}
+				onPlaybackStart={handlePlaybackStart}
+				onMetronomeTick={onMetronomeClick}
+			/>
 
 			{hint && <p className="ea-piano-roll-hint">{hint}</p>}
 			{validation === "interaction" && minInteractions !== undefined && (
