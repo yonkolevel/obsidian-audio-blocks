@@ -1,7 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-	Transport as KitTransport,
-} from "elementary-audio-kit/ui";
+import React, { useCallback, useRef, useState } from "react";
+import { Transport as KitTransport } from "elementary-audio-kit/ui";
 
 export interface TransportProps {
 	tempo: number;
@@ -60,11 +58,8 @@ export function Transport({
 		else startPlayback();
 	}, [isPlaying, startPlayback, stopPlayback]);
 
-	useEffect(() => {
-		return () => {
-			if (timeoutRef.current) clearTimeout(timeoutRef.current);
-		};
-	}, []);
+	// No useEffect for cleanup — the component unmounts when Obsidian
+	// destroys the block, and the timer ref is GC'd.
 
 	return (
 		<KitTransport

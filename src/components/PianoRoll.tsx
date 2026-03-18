@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
 	PianoRoll as KitPianoRoll,
 	type NoteData,
@@ -136,19 +136,19 @@ export function PianoRoll({
 	const [editableNotes, setEditableNotes] = useState<NoteData[] | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 	const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
-	// Ref for synchronous gating — React state updates are async and cause
-	// a timing gap where both transport AND JS onNotePlay fire simultaneously.
 	const transportActiveRef = useRef(false);
 	const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	// Initialize editable notes from clip data
-	useEffect(() => {
+	// Sync editable notes from clip data — derive during render, no useEffect
+	const prevClipRef = useRef(clip);
+	if (clip !== prevClipRef.current) {
+		prevClipRef.current = clip;
 		if (clip) {
 			setEditableNotes([...clip.notes]);
 			setIsDirty(false);
 		}
-	}, [clip]);
+	}
 
 	// The active note set
 	const activeNotes = useMemo(() => {
@@ -184,23 +184,7 @@ export function PianoRoll({
 		}
 	}, [onSave, editableNotes, trackID]);
 
-	useEffect(() => {
-		if (!isDirty || !isEditable) return;
-		if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
-		autoSaveTimeoutRef.current = setTimeout(() => performSave(), 500);
-		return () => {
-			if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
-		};
-	}, [isDirty, isEditable, performSave]);
-
-	// Clean up on unmount
-	useEffect(() => {
-		return () => {
-			if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-			if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
-			if (transportActiveRef.current) onTransportStop?.();
-		};
-	}, []);
+	// Auto-save is scheduled in handleNotesChange — no useEffect needed
 
 	// ------------------------------------------------------------------
 	// Callbacks
@@ -209,10 +193,15 @@ export function PianoRoll({
 		(notes: NoteData[]) => {
 			setEditableNotes(notes);
 			setIsDirty(true);
-			// Live-update transport if playing
 			if (transportActiveRef.current) onTransportNotesUpdate?.(notes);
+
+			// Schedule auto-save directly — no useEffect
+			if (isEditable) {
+				if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+				autoSaveTimeoutRef.current = setTimeout(() => performSave(), 500);
+			}
 		},
-		[onTransportNotesUpdate]
+		[onTransportNotesUpdate, isEditable, performSave]
 	);
 
 	// Gate onNotePlay synchronously — ref is checked inside the callback

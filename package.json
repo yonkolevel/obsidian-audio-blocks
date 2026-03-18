@@ -17,7 +17,7 @@
 	"dependencies": {
 		"@elemaudio/core": "^4.0.0",
 		"@elemaudio/web-renderer": "^4.0.0",
-		"elementary-audio-kit": "^0.2.1",
+		"elementary-audio-kit": "^0.2.2",
 		"js-yaml": "^4.1.0",
 		"jszip": "^3.10.1",
 		"lucide-react": "^0.577.0",
