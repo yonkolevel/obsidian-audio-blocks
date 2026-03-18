@@ -1,102 +1,111 @@
 /**
- * AudioEngine — singleton that manages the Web Audio context and sample playback.
+ * AudioEngine — singleton managing the Elementary Audio DSP graph.
  *
- * For this prototype we use plain Web Audio API (AudioBufferSourceNode) for
- * one-shot sample playback. Elementary Audio's DSP graph will be integrated in
- * a later task when we need effects chains and sequencing.
+ * Uses elementary-audio-kit for instruments (drumSampler, melodicSampler)
+ * and mixer (mixTracks, masterOutput). All audio runs through a single
+ * persistent graph that is re-rendered on every state change — Elementary's
+ * diffing engine ensures only changed nodes trigger recomputation.
  *
- * The AudioContext is created lazily on the first user gesture (pad tap) to
- * comply with browser autoplay policies.
+ * Public API is identical to the previous Web Audio implementation.
  */
 
-import { generateDrumKit } from "./synth-samples";
+import { el, type NodeRepr_t } from "@elemaudio/core";
+import {
+	drumSampler,
+	type DrumPadConfig,
+	VoiceAllocator,
+	midiToRate,
+	mixTracks,
+	masterOutput,
+	type ChannelStrip,
+} from "elementary-audio-kit";
+import { ElementaryRenderer } from "./elementary-renderer";
 import { SoundbankManager } from "./soundbank-manager";
+import {
+	generateDrumKitVFS,
+	generatePianoSampleVFS,
+	generateClickVFS,
+} from "./synth-samples";
 
-/** Bookkeeping for an active note that can be stopped on demand. */
-interface ActiveNote {
-	/** Call to trigger the release phase and clean up. */
-	stop: () => void;
-}
+/** MIDI note number of the pre-generated synth piano VFS sample. */
+const SYNTH_PIANO_BASE_MIDI = 60;
 
 export class AudioEngine {
+	private renderer = new ElementaryRenderer();
 	private ctx: AudioContext | null = null;
-	private sampleBuffers: AudioBuffer[] = [];
 	private initialized = false;
 	private soundbankManager: SoundbankManager | null = null;
-	/** Master output with compressor to prevent clipping when layering notes. */
-	private masterOut: GainNode | null = null;
 
-	/**
-	 * Map of MIDI note number → active note info.
-	 * Used by playToneWithRelease / playSoundbankNoteWithRelease + stopNote.
-	 */
-	private activeNotes: Map<number, ActiveNote> = new Map();
+	// -- Built-in drum kit (16 pads) --
+	private builtinDrumGates: number[] = [];
+	private builtinDrumVfsKeys: string[] = [];
 
-	/**
-	 * Attach a SoundbankManager so the engine can play real samples.
-	 */
+	// -- Soundbank one-shot pads --
+	// slug → Map<sampleMidiNumber, { gate, rate }>
+	private soundbankPadStates: Map<
+		string,
+		Map<number, { gate: number; rate: number }>
+	> = new Map();
+	private soundbankVfsKeys: Map<string, Map<number, string>> = new Map();
+
+	// -- Melodic voice allocator --
+	private voiceAllocator = new VoiceAllocator(8);
+	private activeMelodicSlug: string | null = null;
+
+	// -- Click --
+	private clickGate = 0;
+
+	// -- Gate reset scheduling --
+	private gateResets: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+	// ===================================================================
+	// Public API (signatures identical to previous Web Audio engine)
+	// ===================================================================
+
 	setSoundbankManager(manager: SoundbankManager): void {
 		this.soundbankManager = manager;
 	}
 
-	/**
-	 * Lazily create the AudioContext and generate the built-in drum kit.
-	 * Must be called from a user gesture handler.
-	 */
 	async initialize(): Promise<void> {
 		if (this.initialized) return;
 
 		this.ctx = new AudioContext();
-
-		// Resume in case the context starts in a suspended state
 		if (this.ctx.state === "suspended") {
 			await this.ctx.resume();
 		}
 
-		// Master output chain: gain → compressor → destination
-		// Prevents clipping when layering chords and multiple notes
-		const compressor = this.ctx.createDynamicsCompressor();
-		compressor.threshold.value = -12;
-		compressor.knee.value = 6;
-		compressor.ratio.value = 4;
-		compressor.attack.value = 0.003;
-		compressor.release.value = 0.1;
+		await this.renderer.initialize(this.ctx);
 
-		this.masterOut = this.ctx.createGain();
-		this.masterOut.gain.value = 0.8;
-		this.masterOut.connect(compressor);
-		compressor.connect(this.ctx.destination);
+		// Generate and load built-in samples to VFS
+		const sampleRate = this.ctx.sampleRate;
+		const drumKit = generateDrumKitVFS(sampleRate);
+		const vfsUpdate: Record<string, Float32Array> = {};
 
-		this.sampleBuffers = generateDrumKit(this.ctx);
+		this.builtinDrumGates = new Array(drumKit.length).fill(0);
+		this.builtinDrumVfsKeys = [];
+		for (let i = 0; i < drumKit.length; i++) {
+			const key = `kit/${i}`;
+			vfsUpdate[key] = drumKit[i];
+			this.builtinDrumVfsKeys.push(key);
+		}
+
+		vfsUpdate["synth/piano"] = generatePianoSampleVFS(sampleRate);
+		vfsUpdate["synth/click"] = generateClickVFS(sampleRate);
+
+		this.renderer.loadSamplesToVFS(vfsUpdate);
 		this.initialized = true;
+		this.renderGraph();
 	}
 
-	/**
-	 * Synchronous check whether the engine has been initialized.
-	 * Callbacks can use this to avoid awaiting `initialize()` on every tap.
-	 */
 	isInitialized(): boolean {
 		return this.initialized;
 	}
 
-	/**
-	 * Synchronous check whether a soundbank has already been loaded.
-	 * Returns true if the soundbank's samples are cached and ready to play.
-	 */
 	isSoundbankLoaded(slug: string): boolean {
 		if (!this.soundbankManager) return false;
 		return this.soundbankManager.getSoundbank(slug) !== null;
 	}
 
-	/** Get the output node all audio should connect to. */
-	private get output(): AudioNode {
-		return this.masterOut ?? this.ctx!.destination;
-	}
-
-	/**
-	 * Get the AudioContext (initializing if needed). Useful for callers
-	 * that need to pass it to the SoundbankManager for decoding.
-	 */
 	getAudioContext(): AudioContext | null {
 		return this.ctx;
 	}
@@ -105,59 +114,59 @@ export class AudioEngine {
 	 * Play a one-shot sample for the given pad index (0-15).
 	 */
 	playSample(padIndex: number): void {
-		if (!this.ctx || !this.initialized) return;
-		if (padIndex < 0 || padIndex >= this.sampleBuffers.length) return;
+		if (!this.initialized) return;
+		if (padIndex < 0 || padIndex >= this.builtinDrumGates.length) return;
 
-		const buffer = this.sampleBuffers[padIndex];
-		if (!buffer) return;
-
-		const source = this.ctx.createBufferSource();
-		source.buffer = buffer;
-		source.connect(this.output);
-		source.start();
+		this.triggerOneShot(
+			`kit-${padIndex}`,
+			() => {
+				this.builtinDrumGates[padIndex] = 1;
+			},
+			() => {
+				this.builtinDrumGates[padIndex] = 0;
+			}
+		);
 	}
 
 	/**
-	 * Play a soundbank sample for the given MIDI note.
-	 *
-	 * If the exact note or a range match is found, it plays at normal speed.
-	 * If no direct match exists, the nearest available sample is played with
-	 * pitch-shifting via `playbackRate` — standard Web Audio resampling that
-	 * shifts pitch by the semitone difference between the target and root notes.
-	 *
-	 * Falls back to synthesized FM tone only if no soundbank is loaded at all.
+	 * Play a soundbank sample for the given MIDI note (one-shot).
+	 * Falls back to synthesized tone if no soundbank or out of range.
 	 */
 	playSoundbankNote(slug: string, midiNote: number): void {
-		if (!this.ctx || !this.initialized) return;
+		if (!this.initialized) return;
 
-		if (this.soundbankManager) {
-			const match = this.soundbankManager.findNearestSample(
-				slug,
-				midiNote
-			);
-			if (match) {
-				const semitoneDiff = midiNote - match.rootNote;
-
-				// Only use pitch-shifting within ±12 semitones (1 octave).
-				// Beyond that the sample sounds too chipmunky — fall through to synth.
-				if (Math.abs(semitoneDiff) <= 12) {
-					const source = this.ctx.createBufferSource();
-					source.buffer = match.buffer;
-					source.playbackRate.value = Math.pow(2, semitoneDiff / 12);
-					source.connect(this.output);
-					source.start();
-					return;
-				}
-			}
+		const nearest = this.findNearestSoundbankSample(slug, midiNote);
+		if (!nearest) {
+			this.playTone(midiNote);
+			return;
 		}
 
-		// Fallback to additive piano synth
-		this.playTone(midiNote);
+		const padStates = this.soundbankPadStates.get(slug);
+		if (!padStates) {
+			this.playTone(midiNote);
+			return;
+		}
+
+		const state = padStates.get(nearest.sampleMidi);
+		if (!state) {
+			this.playTone(midiNote);
+			return;
+		}
+
+		this.triggerOneShot(
+			`sb-${slug}-${nearest.sampleMidi}`,
+			() => {
+				state.gate = 1;
+				state.rate = nearest.rate;
+			},
+			() => {
+				state.gate = 0;
+			}
+		);
 	}
 
 	/**
 	 * Lazy-load a soundbank by slug. Returns true if loaded successfully.
-	 * Safe to call multiple times — loading is cached.
 	 */
 	async loadSoundbankForBlock(slug: string): Promise<boolean> {
 		if (!this.soundbankManager || !this.ctx) return false;
@@ -166,21 +175,33 @@ export class AudioEngine {
 			slug,
 			this.ctx
 		);
-		return loaded !== null;
+		if (!loaded) return false;
+
+		// Load samples into VFS
+		const keyMap = this.soundbankManager.loadSoundbankToVFS(
+			slug,
+			this.renderer
+		);
+		if (!keyMap) return false;
+
+		// Set up pad states for one-shot triggering
+		const padStates = new Map<number, { gate: number; rate: number }>();
+		for (const [midiNumber] of loaded.samples) {
+			padStates.set(midiNumber, { gate: 0, rate: 1 });
+		}
+		this.soundbankPadStates.set(slug, padStates);
+		this.soundbankVfsKeys.set(slug, keyMap);
+
+		this.renderGraph();
+		return true;
 	}
 
-	/**
-	 * Get the default octave for a soundbank, or null if not available.
-	 */
 	getSoundbankDefaultOctave(slug: string): number | null {
 		if (!this.soundbankManager) return null;
 		const config = this.soundbankManager.getConfig(slug);
 		return config?.defaultOctave ?? null;
 	}
 
-	/**
-	 * Get a human-readable sample name for a MIDI note in a soundbank.
-	 */
 	getSampleNameForNote(slug: string, midiNote: number): string | null {
 		return (
 			this.soundbankManager?.getSampleNameForNote(slug, midiNote) ??
@@ -188,9 +209,6 @@ export class AudioEngine {
 		);
 	}
 
-	/**
-	 * Build a full map of MIDI note number → human-readable name for a soundbank.
-	 */
 	getNoteNamesForSoundbank(slug: string): Map<number, string> {
 		const map = new Map<number, string>();
 		if (!this.soundbankManager) return map;
@@ -207,279 +225,383 @@ export class AudioEngine {
 	}
 
 	/**
-	 * Create the additive piano synth voice and connect it to the output.
-	 * Returns { master, oscillators } for envelope control.
-	 *
-	 * The synth uses:
-	 * - Fundamental + slightly detuned copy for warmth/chorus
-	 * - 2nd and 3rd harmonics with faster decay for brightness
-	 * - Short filtered noise burst for the hammer/attack transient
-	 */
-	private createPianoVoice(freq: number): {
-		master: GainNode;
-		oscillators: OscillatorNode[];
-	} {
-		const ctx = this.ctx!;
-		const t = ctx.currentTime;
-
-		const master = ctx.createGain();
-		master.gain.value = 0;
-		master.connect(this.output);
-
-		const oscillators: OscillatorNode[] = [];
-
-		// Harmonic partials: [frequency multiplier, initial gain, decay rate]
-		const partials: [number, number, number][] = [
-			[1.0, 0.35, 0.8],      // fundamental
-			[1.002, 0.2, 0.8],     // detuned copy for warmth
-			[2.0, 0.1, 0.4],      // octave harmonic
-			[3.01, 0.03, 0.25],   // slightly inharmonic 5th
-			[4.0, 0.015, 0.15],   // 2nd octave (bright shimmer)
-		];
-
-		for (const [ratio, gain, decayRate] of partials) {
-			const osc = ctx.createOscillator();
-			const g = ctx.createGain();
-			osc.type = "sine";
-			osc.frequency.value = freq * ratio;
-
-			// Each partial has its own gain with independent decay
-			g.gain.setValueAtTime(gain, t);
-			if (ratio > 1.5) {
-				// Higher partials decay faster → tone mellows over time
-				g.gain.setTargetAtTime(gain * 0.02, t + 0.01, decayRate);
-			}
-
-			osc.connect(g);
-			g.connect(master);
-			osc.start(t);
-			oscillators.push(osc);
-		}
-
-		// Attack transient: short burst of filtered noise (hammer hit)
-		const noiseLen = Math.floor(ctx.sampleRate * 0.015);
-		const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
-		const noiseData = noiseBuf.getChannelData(0);
-		for (let i = 0; i < noiseLen; i++) {
-			noiseData[i] = (Math.random() * 2 - 1);
-		}
-		const noise = ctx.createBufferSource();
-		noise.buffer = noiseBuf;
-
-		const noiseFilter = ctx.createBiquadFilter();
-		noiseFilter.type = "bandpass";
-		noiseFilter.frequency.value = Math.min(freq * 6, 8000);
-		noiseFilter.Q.value = 1.5;
-
-		const noiseGain = ctx.createGain();
-		noiseGain.gain.setValueAtTime(0.06, t);
-		noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.015);
-
-		noise.connect(noiseFilter);
-		noiseFilter.connect(noiseGain);
-		noiseGain.connect(master);
-		noise.start(t);
-
-		return { master, oscillators };
-	}
-
-	/**
-	 * Play a melodic tone at the given MIDI note number.
-	 * Uses additive synthesis with noise transient for a piano-like sound.
+	 * Play a melodic tone at the given MIDI note number (fixed duration).
 	 */
 	playTone(midiNote: number, duration = 1.5): void {
-		if (!this.ctx) return;
-		const t = this.ctx.currentTime;
-		const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
+		if (!this.initialized) return;
 
-		const { master, oscillators } = this.createPianoVoice(freq);
+		this.activeMelodicSlug = null;
+		this.voiceAllocator.noteOn(midiNote);
+		this.renderGraph();
 
-		// Envelope: fast attack → initial decay → slow sustain decay → release
-		master.gain.setValueAtTime(0, t);
-		master.gain.linearRampToValueAtTime(1.0, t + 0.003);
-		master.gain.setTargetAtTime(0.35, t + 0.003, 0.12);
-		master.gain.setTargetAtTime(0.001, t + duration * 0.7, duration * 0.15);
-
-		// Stop oscillators after full duration + tail
-		const stopTime = t + duration + 0.3;
-		for (const osc of oscillators) {
-			osc.stop(stopTime);
-		}
+		setTimeout(() => {
+			this.voiceAllocator.noteOff(midiNote);
+			this.renderGraph();
+		}, duration * 700);
 	}
 
 	/**
 	 * Play a melodic tone that sustains until explicitly stopped.
-	 * Returns a stop function, or null if engine not initialized.
 	 */
 	playToneWithRelease(midiNote: number): (() => void) | null {
-		if (!this.ctx) return null;
+		if (!this.initialized) return null;
 
-		this.stopNote(midiNote);
+		// Stop existing note at this pitch
+		this.voiceAllocator.noteOff(midiNote);
 
-		const ctx = this.ctx;
-		const t = ctx.currentTime;
-		const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
-
-		const { master, oscillators } = this.createPianoVoice(freq);
-
-		// Envelope: fast attack → decay to sustain level, hold indefinitely
-		master.gain.setValueAtTime(0, t);
-		master.gain.linearRampToValueAtTime(1.0, t + 0.003);
-		master.gain.setTargetAtTime(0.35, t + 0.003, 0.12);
+		this.activeMelodicSlug = null;
+		this.voiceAllocator.noteOn(midiNote);
+		this.renderGraph();
 
 		let released = false;
-
-		const stop = () => {
+		return () => {
 			if (released) return;
 			released = true;
-			this.activeNotes.delete(midiNote);
-
-			const now = ctx.currentTime;
-			const releaseDuration = 0.2;
-
-			master.gain.cancelScheduledValues(now);
-			master.gain.setValueAtTime(master.gain.value, now);
-			master.gain.linearRampToValueAtTime(0, now + releaseDuration);
-
-			for (const osc of oscillators) {
-				osc.stop(now + releaseDuration + 0.01);
-			}
+			this.voiceAllocator.noteOff(midiNote);
+			this.renderGraph();
 		};
-
-		this.activeNotes.set(midiNote, { stop });
-		return stop;
 	}
 
 	/**
 	 * Play a soundbank sample that sustains until explicitly stopped.
-	 *
-	 * Uses `findNearestSample` for pitch-shifted playback — if the exact
-	 * note is not available, the nearest sample is played at an adjusted
-	 * playback rate.
-	 *
-	 * Falls back to `playToneWithRelease` if no soundbank is loaded at all.
-	 * The note is tracked in activeNotes so it can be stopped via
-	 * `stopNote(midiNote)`.
+	 * Falls back to playToneWithRelease if no soundbank or out of range.
 	 */
-	playSoundbankNoteWithRelease(slug: string, midiNote: number): (() => void) | null {
-		if (!this.ctx || !this.initialized) return null;
+	playSoundbankNoteWithRelease(
+		slug: string,
+		midiNote: number
+	): (() => void) | null {
+		if (!this.initialized) return null;
 
-		if (this.soundbankManager) {
-			const match = this.soundbankManager.findNearestSample(slug, midiNote);
-			if (match) {
-				const semitoneDiff = midiNote - match.rootNote;
+		const vfsKeys = this.soundbankVfsKeys.get(slug);
+		if (!vfsKeys) {
+			return this.playToneWithRelease(midiNote);
+		}
 
-				// Only use sample within ±12 semitones; beyond that use synth
-				if (Math.abs(semitoneDiff) > 12) {
-					return this.playToneWithRelease(midiNote);
-				}
+		const nearest = this.findNearestSoundbankSample(slug, midiNote);
+		if (!nearest) {
+			return this.playToneWithRelease(midiNote);
+		}
 
-				// Re-trigger: stop previous instance
-				this.stopNote(midiNote);
+		// Stop existing note at this pitch
+		this.voiceAllocator.noteOff(midiNote);
 
-				const ctx = this.ctx;
-				const source = ctx.createBufferSource();
-				const output = ctx.createGain();
-				source.buffer = match.buffer;
+		this.activeMelodicSlug = slug;
+		this.voiceAllocator.noteOn(midiNote);
+		this.renderGraph();
 
-				source.playbackRate.value = Math.pow(2, semitoneDiff / 12);
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			this.voiceAllocator.noteOff(midiNote);
+			this.renderGraph();
+		};
+	}
 
-				output.gain.setValueAtTime(1, ctx.currentTime);
+	stopNote(midiNote: number): void {
+		this.voiceAllocator.noteOff(midiNote);
+		this.renderGraph();
+	}
 
-				source.connect(output);
-				output.connect(this.output);
-				source.start();
-
-				let released = false;
-
-				const stop = () => {
-					if (released) return;
-					released = true;
-					this.activeNotes.delete(midiNote);
-
-					const now = ctx.currentTime;
-					const releaseDuration = 0.05; // Shorter release for samples
-
-					output.gain.cancelScheduledValues(now);
-					output.gain.setValueAtTime(output.gain.value, now);
-					output.gain.linearRampToValueAtTime(0, now + releaseDuration);
-
-					// Stop the source after the gain ramp finishes
-					try {
-						source.stop(now + releaseDuration + 0.01);
-					} catch {
-						// Source may have already ended naturally
-					}
-				};
-
-				this.activeNotes.set(midiNote, { stop });
-				return stop;
+	stopAllNotes(): void {
+		const voices = this.voiceAllocator.getVoices();
+		for (const voice of voices) {
+			if (voice.gate > 0) {
+				this.voiceAllocator.noteOff(voice.note);
 			}
 		}
-
-		// Fallback to synthesized tone with release
-		return this.playToneWithRelease(midiNote);
+		this.renderGraph();
 	}
 
-	/**
-	 * Stop an active note by MIDI note number.
-	 *
-	 * Triggers the release envelope for the note and removes it from the
-	 * active notes map. No-op if the note is not currently playing.
-	 *
-	 * TODO: Renderers (PianoRoll, PianoKeys, DrumPads) should call this
-	 * from their handleNoteOff callbacks for interactive keyboard support.
-	 */
-	stopNote(midiNote: number): void {
-		const active = this.activeNotes.get(midiNote);
-		if (active) {
-			active.stop();
-			// stop() itself calls activeNotes.delete, but be safe
-			this.activeNotes.delete(midiNote);
-		}
-	}
-
-	/**
-	 * Stop all currently active notes. Useful when switching views or
-	 * cleaning up.
-	 */
-	stopAllNotes(): void {
-		for (const [, active] of this.activeNotes) {
-			active.stop();
-		}
-		this.activeNotes.clear();
-	}
-
-	/**
-	 * Play a short metronome click (high-pitched sine tick).
-	 */
 	playClick(): void {
-		if (!this.ctx) return;
-		const osc = this.ctx.createOscillator();
-		const gain = this.ctx.createGain();
-		osc.type = "sine";
-		osc.frequency.value = 1000;
-		gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
-		gain.gain.exponentialRampToValueAtTime(
-			0.001,
-			this.ctx.currentTime + 0.05
+		if (!this.initialized) return;
+		this.triggerOneShot(
+			"click",
+			() => {
+				this.clickGate = 1;
+			},
+			() => {
+				this.clickGate = 0;
+			}
 		);
-		osc.connect(gain);
-		gain.connect(this.output);
-		osc.start();
-		osc.stop(this.ctx.currentTime + 0.05);
 	}
 
-	/**
-	 * Clean up resources when the plugin is unloaded.
-	 */
 	dispose(): void {
 		this.stopAllNotes();
+		for (const timer of this.gateResets.values()) {
+			clearTimeout(timer);
+		}
+		this.gateResets.clear();
+		this.renderer.dispose();
 		if (this.ctx) {
 			this.ctx.close();
 		}
 		this.ctx = null;
-		this.sampleBuffers = [];
 		this.initialized = false;
+	}
+
+	// ===================================================================
+	// Private — one-shot trigger mechanism
+	// ===================================================================
+
+	/**
+	 * Trigger a one-shot sound by toggling a gate high then scheduling
+	 * a reset to low. Handles rapid re-triggering by forcing a gate-low
+	 * render, waiting one audio callback (~5ms), then re-triggering.
+	 */
+	private triggerOneShot(
+		id: string,
+		activate: () => void,
+		deactivate: () => void
+	): void {
+		const existing = this.gateResets.get(id);
+
+		if (existing) {
+			// Gate is still high from a recent trigger — reset first
+			clearTimeout(existing);
+			this.gateResets.delete(id);
+			deactivate();
+			this.renderGraph();
+
+			// Wait for the audio thread to see gate=0 before re-triggering
+			setTimeout(() => {
+				activate();
+				this.renderGraph();
+				this.scheduleGateReset(id, deactivate);
+			}, 5);
+		} else {
+			activate();
+			this.renderGraph();
+			this.scheduleGateReset(id, deactivate);
+		}
+	}
+
+	private scheduleGateReset(
+		id: string,
+		deactivate: () => void
+	): void {
+		this.gateResets.set(
+			id,
+			setTimeout(() => {
+				this.gateResets.delete(id);
+				deactivate();
+				this.renderGraph();
+			}, 50)
+		);
+	}
+
+	// ===================================================================
+	// Private — nearest sample lookup
+	// ===================================================================
+
+	private findNearestSoundbankSample(
+		slug: string,
+		midiNote: number
+	): { sampleMidi: number; rate: number } | null {
+		if (!this.soundbankManager) return null;
+
+		const match = this.soundbankManager.findNearestSample(slug, midiNote);
+		if (!match) return null;
+
+		const semitoneDiff = midiNote - match.rootNote;
+		if (Math.abs(semitoneDiff) > 12) return null;
+
+		return {
+			sampleMidi: match.rootNote,
+			rate: Math.pow(2, semitoneDiff / 12),
+		};
+	}
+
+	// ===================================================================
+	// Private — graph building and rendering
+	// ===================================================================
+
+	private renderGraph(): void {
+		if (!this.renderer.isReady()) return;
+
+		const tracks: ChannelStrip[] = [];
+
+		// 1. Built-in drum kit
+		const kitPads = this.buildBuiltinDrumPads();
+		if (kitPads.length > 0) {
+			const { signal } = drumSampler({ trackId: "kit", pads: kitPads });
+			tracks.push({ trackId: "kit", signal, volume: 0.8 });
+		}
+
+		// 2. Soundbank one-shot pads (custom nodes with per-pad rate)
+		for (const [slug, padStates] of this.soundbankPadStates) {
+			const signal = this.buildSoundbankOneShotNodes(slug, padStates);
+			tracks.push({ trackId: `sb-${slug}`, signal, volume: 0.8 });
+		}
+
+		// 3. Click
+		tracks.push({
+			trackId: "click",
+			signal: el.sample(
+				{
+					path: "synth/click",
+					mode: "trigger",
+					key: "click-sample",
+				},
+				el.const({ key: "click-gate", value: this.clickGate }),
+				1
+			),
+			volume: 0.3,
+		});
+
+		// 4. Melodic voices
+		const melodicSignal = this.buildMelodicVoices();
+		tracks.push({ trackId: "melodic", signal: melodicSignal, volume: 0.7 });
+
+		// Mix and master
+		const mix = mixTracks(tracks);
+		const output = masterOutput(mix, 1.5, 0.5);
+		this.renderer.render(output.left, output.right);
+	}
+
+	private buildBuiltinDrumPads(): DrumPadConfig[] {
+		return this.builtinDrumVfsKeys.map((vfsKey, i) => ({
+			vfsKey,
+			midiNumber: i,
+			gate: this.builtinDrumGates[i] ?? 0,
+		}));
+	}
+
+	/**
+	 * Build one-shot sample nodes for a soundbank with per-pad rate
+	 * (for pitch-shifted playback). Can't use drumSampler() here
+	 * because it hardcodes rate=1.
+	 */
+	private buildSoundbankOneShotNodes(
+		slug: string,
+		padStates: Map<number, { gate: number; rate: number }>
+	): NodeRepr_t {
+		const vfsKeys = this.soundbankVfsKeys.get(slug);
+		if (!vfsKeys) return el.const({ value: 0 });
+
+		const signals: NodeRepr_t[] = [];
+
+		for (const [midiNumber, state] of padStates) {
+			const vfsKey = vfsKeys.get(midiNumber);
+			if (!vfsKey) continue;
+
+			const gate = el.const({
+				key: `sb-${slug}-${midiNumber}-gate`,
+				value: state.gate,
+			});
+			const rate = el.const({
+				key: `sb-${slug}-${midiNumber}-rate`,
+				value: state.rate,
+			});
+
+			signals.push(
+				el.sample(
+					{
+						path: vfsKey,
+						mode: "trigger",
+						key: `sb-${slug}-${midiNumber}-sample`,
+					},
+					gate,
+					rate
+				)
+			);
+		}
+
+		if (signals.length === 0) return el.const({ value: 0 });
+
+		let mix: NodeRepr_t = signals[0]!;
+		for (let i = 1; i < signals.length; i++) {
+			mix = el.add(mix, signals[i]!);
+		}
+		return mix;
+	}
+
+	/**
+	 * Build polyphonic melodic voice nodes. Each voice gets the nearest
+	 * VFS sample for its note and a pitch-shifting rate.
+	 */
+	private buildMelodicVoices(): NodeRepr_t {
+		const voices = this.voiceAllocator.getVoices();
+
+		const signals: NodeRepr_t[] = voices.map((voice) => {
+			if (voice.note === 0) {
+				return el.const({
+					key: `mel:v${voice.key}:silent`,
+					value: 0,
+				});
+			}
+
+			const { vfsKey, baseMidi } = this.getVfsKeyForMelodicNote(
+				voice.note
+			);
+			const rate = midiToRate(voice.note, baseMidi);
+
+			const gate = el.const({
+				key: `mel:v${voice.key}:gate`,
+				value: voice.gate,
+			});
+			const rateNode = el.const({
+				key: `mel:v${voice.key}:rate`,
+				value: rate,
+			});
+
+			// ADSR envelope to avoid clicks on note-off.
+			// 3ms attack, 100ms decay to 35% sustain, 150ms release.
+			const env = el.adsr(0.003, 0.1, 0.35, 0.15, gate);
+
+			return el.mul(
+				el.sample(
+					{
+						path: vfsKey,
+						mode: "trigger",
+						key: `mel:v${voice.key}:sample`,
+					},
+					gate,
+					rateNode
+				),
+				env
+			);
+		});
+
+		let mix: NodeRepr_t = signals[0]!;
+		for (let i = 1; i < signals.length; i++) {
+			mix = el.add(mix, signals[i]!);
+		}
+		return mix;
+	}
+
+	/**
+	 * Resolve a MIDI note to a VFS key and base MIDI number.
+	 * Uses the active soundbank if available, falls back to synth piano.
+	 */
+	private getVfsKeyForMelodicNote(midiNote: number): {
+		vfsKey: string;
+		baseMidi: number;
+	} {
+		if (this.activeMelodicSlug) {
+			const vfsKeys = this.soundbankVfsKeys.get(
+				this.activeMelodicSlug
+			);
+			if (vfsKeys) {
+				let bestKey = "";
+				let bestMidi = SYNTH_PIANO_BASE_MIDI;
+				let bestDist = Infinity;
+
+				for (const [sampleMidi, vfsKey] of vfsKeys) {
+					const dist = Math.abs(midiNote - sampleMidi);
+					if (dist < bestDist) {
+						bestDist = dist;
+						bestKey = vfsKey;
+						bestMidi = sampleMidi;
+					}
+				}
+
+				if (bestKey && bestDist <= 12) {
+					return { vfsKey: bestKey, baseMidi: bestMidi };
+				}
+			}
+		}
+
+		return { vfsKey: "synth/piano", baseMidi: SYNTH_PIANO_BASE_MIDI };
 	}
 }

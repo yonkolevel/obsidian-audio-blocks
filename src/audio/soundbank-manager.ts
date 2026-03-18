@@ -10,6 +10,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import type { ElementaryRenderer } from "./elementary-renderer";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -229,6 +230,43 @@ export class SoundbankManager {
 			`SoundbankManager: loaded ${samplesMap.size} samples for "${slug}"`
 		);
 		return loadedSoundbank;
+	}
+
+	// ------------------------------------------------------------------
+	// VFS Loading (Elementary Audio)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Load a soundbank's samples into Elementary's Virtual File System.
+	 * The soundbank must already be loaded via `loadSoundbank()`.
+	 *
+	 * VFS keys follow the convention `{slug}/{midiNumber}`.
+	 * Returns a map of midiNumber → VFS key, or null if not loaded.
+	 */
+	loadSoundbankToVFS(
+		slug: string,
+		renderer: ElementaryRenderer
+	): Map<number, string> | null {
+		const loaded = this.loaded.get(slug);
+		if (!loaded) return null;
+
+		const vfsUpdate: Record<string, Float32Array> = {};
+		const keyMap = new Map<number, string>();
+
+		for (const [midiNumber, audioBuffer] of loaded.samples) {
+			const vfsKey = `${slug}/${midiNumber}`;
+			// Extract channel 0 (mono) from AudioBuffer
+			const channelData = audioBuffer.getChannelData(0);
+			// Copy into a new Float32Array (AudioBuffer data may be detachable)
+			vfsUpdate[vfsKey] = new Float32Array(channelData);
+			keyMap.set(midiNumber, vfsKey);
+		}
+
+		renderer.loadSamplesToVFS(vfsUpdate);
+		console.log(
+			`SoundbankManager: loaded ${keyMap.size} samples to VFS for "${slug}"`
+		);
+		return keyMap;
 	}
 
 	// ------------------------------------------------------------------
