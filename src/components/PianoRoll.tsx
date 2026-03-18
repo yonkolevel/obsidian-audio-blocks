@@ -137,6 +137,7 @@ export function PianoRoll({
 	const [isDirty, setIsDirty] = useState(false);
 	const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 	const transportActiveRef = useRef(false);
+	const pianoRollStopRef = useRef<(() => void) | null>(null);
 	const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -222,6 +223,8 @@ export function PianoRoll({
 	const handlePlaybackStart = useCallback(async () => {
 		if (onRequestExclusivePlayback) {
 			onRequestExclusivePlayback(() => {
+				// Stop this piano roll's playback imperatively
+				pianoRollStopRef.current?.();
 				transportActiveRef.current = false;
 				onTransportStop?.();
 			});
@@ -298,8 +301,9 @@ export function PianoRoll({
 				<span className="ea-piano-roll-track">{trackLabel}</span>
 			</div>
 
-			{/* Kit PianoRoll — handleNotePlay/handleMetronomeTick gate via ref */}
+			{/* Kit PianoRoll */}
 			<KitPianoRoll
+				stopRef={pianoRollStopRef}
 				notes={activeNotes}
 				rows={rows}
 				lengthInBars={lengthInBars}
