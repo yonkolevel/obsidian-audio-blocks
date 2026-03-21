@@ -9,6 +9,7 @@ import { registerCalloutProcessor } from "./renderers/callout";
 import { registerAudioPlayerProcessor } from "./renderers/audio-player";
 import { registerQuestionProcessor } from "./renderers/question";
 import { registerPianoRollProcessor } from "./renderers/piano-roll";
+import { registerMusicProcessor } from "./renderers/music";
 
 /**
  * Known interactive block types handled by this plugin.
@@ -106,6 +107,9 @@ export default class ElementaryAudioPlugin extends Plugin {
 		registerAudioPlayerProcessor(this, this.audioEngine);
 		registerQuestionProcessor(this);
 		registerPianoRollProcessor(this, this.audioEngine);
+
+		// Music Markdown spec — generic block types
+		registerMusicProcessor(this, this.audioEngine, this.focusManager);
 
 		// Release keyboard focus when clicking outside interactive blocks
 		const handleGlobalClick = (e: MouseEvent) => {
