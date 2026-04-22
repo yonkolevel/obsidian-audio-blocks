@@ -1,19 +1,9 @@
 /**
- * Registers the `drumPads` fenced code block processor with Obsidian.
+ * Drum pads renderer.
  *
- * When Obsidian encounters a code block like:
- *
- * ```drumPads
- * soundbank: studio-session-kit
- * hint: Tap the pads to hear drum sounds
- * ```
- *
- * This processor parses the YAML config and mounts a React DrumPads component
- * into the rendered markdown.
- *
- * If a soundbank is specified and the SoundbankManager has a valid path,
- * real .wav samples are loaded and played. Otherwise the built-in synthesized
- * drum kit is used as a fallback.
+ * Exports `mountDrumPads()` — handles engine init, soundbank load, focus
+ * management, and React rendering. Called by both the legacy `drumPads`
+ * code block processor and the `music drums` variant.
  */
 
 import { Plugin } from "obsidian";
@@ -23,12 +13,11 @@ import { DrumPads } from "../components/DrumPads";
 import { AudioEngine } from "../audio/engine";
 import { FocusManager } from "../audio/focus-manager";
 
-/**
- * Minimal YAML parser for the simple key-value configs we expect.
- * Avoids pulling in js-yaml for this prototype — the configs are just
- * flat key: value pairs.
- */
-function parseSimpleYaml(source: string): Record<string, string> {
+// ---------------------------------------------------------------------------
+// Parsing helpers (exported for reuse by music.ts)
+// ---------------------------------------------------------------------------
+
+export function parseSimpleYaml(source: string): Record<string, string> {
 	const result: Record<string, string> = {};
 	for (const line of source.split("\n")) {
 		const trimmed = line.trim();
@@ -42,19 +31,160 @@ function parseSimpleYaml(source: string): Record<string, string> {
 	return result;
 }
 
-/**
- * Parse a YAML array-like value into a number array.
- * Supports formats like: [1, 2, 3] or 1, 2, 3
- */
-function parseNumberArray(value: string | undefined): number[] | undefined {
-	if (!value) return undefined;
-	const cleaned = value.replace(/[\[\]]/g, "");
+export function parseNumberArray(
+	value: unknown
+): number[] | undefined {
+	if (value === undefined || value === null) return undefined;
+
+	if (Array.isArray(value)) {
+		const nums = value
+			.map((v) => (typeof v === "number" ? v : parseInt(String(v), 10)))
+			.filter((n) => !isNaN(n));
+		return nums.length > 0 ? nums : undefined;
+	}
+
+	const str = String(value);
+	if (!str) return undefined;
+	const cleaned = str.replace(/[\[\]]/g, "");
 	const nums = cleaned
 		.split(",")
 		.map((s) => parseInt(s.trim(), 10))
 		.filter((n) => !isNaN(n));
 	return nums.length > 0 ? nums : undefined;
 }
+
+// ---------------------------------------------------------------------------
+// Mount
+// ---------------------------------------------------------------------------
+
+export interface DrumPadsMountOptions {
+	/** Soundbank slug — if empty, the built-in synth kit is used. */
+	soundbank: string;
+	hint?: string;
+	highlightedPads?: number[];
+	validation?: "interaction" | "playback";
+	minInteractions?: number;
+}
+
+/**
+ * Mount a DrumPads React tree into `el`. Returns the Root so the caller
+ * can track it for cleanup.
+ */
+export function mountDrumPads(
+	el: HTMLElement,
+	engine: AudioEngine,
+	focusManager: FocusManager,
+	options: DrumPadsMountOptions
+): Root {
+	const soundbankSlug = options.soundbank;
+	const container = el.createDiv({ cls: "ea-block-container" });
+	const root = createRoot(container);
+
+	let isLoading = true;
+
+	const buildLabels = (): string[] | undefined => {
+		if (!soundbankSlug) return undefined;
+		if (!engine.isSoundbankLoaded(soundbankSlug)) return undefined;
+
+		const defaultOctave =
+			engine.getSoundbankDefaultOctave(soundbankSlug) ?? 24;
+		const names = engine.getNoteNamesForSoundbank(soundbankSlug);
+		if (names.size === 0) return undefined;
+
+		// Map each pad index to the soundbank sample name at the corresponding
+		// MIDI note. Pads without a matching sample keep the generic default.
+		const GENERIC = [
+			"FX 1", "FX 2", "FX 3", "FX 4",
+			"Tom 1", "Tom 2", "Tom 3", "Tom 4",
+			"CH", "OH", "Perc 1", "Perc 2",
+			"Kick", "Snare", "Clap", "Rim",
+		];
+		return GENERIC.map(
+			(fallback, i) => names.get(defaultOctave + i) ?? fallback
+		);
+	};
+
+	const handlePadTap = (padIndex: number) => {
+		if (engine.isInitialized()) {
+			if (soundbankSlug && engine.isSoundbankLoaded(soundbankSlug)) {
+				const defaultOctave =
+					engine.getSoundbankDefaultOctave(soundbankSlug) ?? 24;
+				engine.playSoundbankNote(
+					soundbankSlug,
+					defaultOctave + padIndex
+				);
+				return;
+			}
+			if (!soundbankSlug) {
+				engine.playSample(padIndex);
+				return;
+			}
+		}
+
+		(async () => {
+			await engine.initialize();
+			if (soundbankSlug) {
+				await engine.loadSoundbankForBlock(soundbankSlug);
+				const defaultOctave =
+					engine.getSoundbankDefaultOctave(soundbankSlug) ?? 24;
+				engine.playSoundbankNote(
+					soundbankSlug,
+					defaultOctave + padIndex
+				);
+			} else {
+				engine.playSample(padIndex);
+			}
+			isLoading = false;
+			render();
+		})();
+	};
+
+	const render = () => {
+		root.render(
+			createElement(DrumPads, {
+				soundbank: soundbankSlug || "default",
+				hint: options.hint,
+				highlightedPads: options.highlightedPads,
+				validation:
+					options.validation === "interaction"
+						? "interaction"
+						: undefined,
+				minInteractions: options.minInteractions,
+				isLoading,
+				labels: buildLabels(),
+				onPadTap: handlePadTap,
+				onRequestFocus: (release: () => void) => {
+					focusManager.requestFocus(() => {
+						release();
+						engine.stopAllNotes();
+					});
+				},
+			})
+		);
+	};
+
+	const finishLoad = () => {
+		isLoading = false;
+		render();
+	};
+
+	if (soundbankSlug) {
+		engine
+			.initialize()
+			.then(() => engine.loadSoundbankForBlock(soundbankSlug))
+			.then(finishLoad)
+			.catch(finishLoad);
+	} else {
+		engine.initialize().then(finishLoad).catch(finishLoad);
+	}
+
+	render();
+	return root;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy `drumPads` code block processor
+// ---------------------------------------------------------------------------
 
 export function registerDrumPadsProcessor(
 	plugin: Plugin,
@@ -67,119 +197,36 @@ export function registerDrumPadsProcessor(
 		"drumPads",
 		(source: string, el: HTMLElement) => {
 			const config = parseSimpleYaml(source);
-			const soundbankSlug = config.soundbank || "";
+			const soundbank = config.soundbank || "";
 
-			// Validation: warn if soundbank is missing
-			if (!soundbankSlug) {
-				const warningBar = el.createDiv({
-					cls: "ea-validation-warning",
-				});
-				warningBar.textContent =
+			if (!soundbank) {
+				const warning = el.createDiv({ cls: "ea-validation-warning" });
+				warning.textContent =
 					"Warning: drumPads block is missing 'soundbank' property";
 			}
 
-			const container = el.createDiv({ cls: "ea-block-container" });
-			const root = createRoot(container);
+			const root = mountDrumPads(el, engine, focusManager, {
+				soundbank,
+				hint: config.hint,
+				highlightedPads: parseNumberArray(config.highlightedPads),
+				validation:
+					config.validation === "interaction"
+						? "interaction"
+						: undefined,
+				minInteractions: config.minInteractions
+					? parseInt(config.minInteractions, 10)
+					: undefined,
+			});
 			roots.push(root);
-
-			// Track loading state so the component can show a loading indicator
-			let isLoading = true;
-
-			const handlePadTap = (padIndex: number) => {
-				// Fast synchronous path: engine + soundbank already ready
-				if (engine.isInitialized()) {
-					if (soundbankSlug && engine.isSoundbankLoaded(soundbankSlug)) {
-						const defaultOctave =
-							engine.getSoundbankDefaultOctave(soundbankSlug) ?? 24;
-						const midiNote = defaultOctave + padIndex;
-						engine.playSoundbankNote(soundbankSlug, midiNote);
-						return;
-					}
-					if (!soundbankSlug) {
-						engine.playSample(padIndex);
-						return;
-					}
-				}
-
-				// Slow async path: first tap before eager-load completes
-				(async () => {
-					await engine.initialize();
-					if (soundbankSlug) {
-						await engine.loadSoundbankForBlock(soundbankSlug);
-						const defaultOctave =
-							engine.getSoundbankDefaultOctave(soundbankSlug) ?? 24;
-						const midiNote = defaultOctave + padIndex;
-						engine.playSoundbankNote(soundbankSlug, midiNote);
-					} else {
-						engine.playSample(padIndex);
-					}
-					isLoading = false;
-					renderComponent();
-				})();
-			};
-
-			// Helper to re-render the component with current loading state
-			const renderComponent = () => {
-				root.render(
-					createElement(DrumPads, {
-						soundbank: soundbankSlug || "default",
-						hint: config.hint,
-						highlightedPads: parseNumberArray(config.highlightedPads),
-						validation: config.validation === "interaction" ? "interaction" : undefined,
-						minInteractions: config.minInteractions
-							? parseInt(config.minInteractions, 10)
-							: undefined,
-						isLoading,
-						onPadTap: handlePadTap,
-						onRequestFocus: (release: () => void) => {
-							focusManager.requestFocus(() => {
-								release();
-								engine.stopAllNotes();
-							});
-						},
-					})
-				);
-			};
-
-			// Eagerly start loading the soundbank and flip loading state when done
-			if (soundbankSlug) {
-				engine
-					.initialize()
-					.then(() => engine.loadSoundbankForBlock(soundbankSlug))
-					.then(() => {
-						isLoading = false;
-						renderComponent();
-					})
-					.catch(() => {
-						isLoading = false;
-						renderComponent();
-					});
-			} else {
-				// No soundbank to load — just initialize the engine
-				engine
-					.initialize()
-					.then(() => {
-						isLoading = false;
-						renderComponent();
-					})
-					.catch(() => {
-						isLoading = false;
-						renderComponent();
-					});
-			}
-
-			// Initial render with loading state
-			renderComponent();
 		}
 	);
 
-	// Clean up all React roots when the plugin is unloaded
 	plugin.register(() => {
 		for (const root of roots) {
 			try {
 				root.unmount();
 			} catch {
-				// Root may already be unmounted if the markdown view was closed
+				// Already unmounted
 			}
 		}
 		roots.length = 0;

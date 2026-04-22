@@ -1,235 +1,245 @@
 /**
- * Registers the `pianoRoll` fenced code block processor with Obsidian.
+ * Piano roll renderer.
  *
- * When Obsidian encounters a code block like:
+ * Exports `mountPianoRoll()` — handles playground loading (from explicit
+ * `playground:` field or inherited from a preceding `<!-- step: ... -->`
+ * comment), inline-note fallback (from `music sequence` bodies), engine
+ * wiring, soundbank loading, and React rendering.
  *
- * ```pianoRoll
- * trackID: 0
- * validation: playback
- * hint: Listen to the basic 4/4 pattern
- * playground: assets/kick-pattern.mcplayground
- * ```
- *
- * This processor parses the YAML config, optionally loads a .mcplayground
- * file, and mounts a React PianoRoll component into the rendered markdown.
- *
- * The `playground` path is resolved relative to the vault root. The
- * .mcplayground file is a ZIP archive containing `bundle/song.json` with
- * track and MIDI note data.
+ * Called by both the legacy `pianoRoll` code block processor and the
+ * `music sequence` variant.
  */
 
 import { Plugin, MarkdownPostProcessorContext } from "obsidian";
 import { createElement } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { PianoRoll } from "../components/PianoRoll";
-import { readPlayground, PlaygroundData, NoteData } from "../playground/reader";
+import {
+	readPlayground,
+	PlaygroundData,
+	NoteData,
+} from "../playground/reader";
 import { savePlayground } from "../playground/writer";
 import { AudioEngine } from "../audio/engine";
+import { parseSimpleYaml } from "./drum-pads";
 import * as path from "path";
 
-/**
- * Minimal YAML parser for flat key-value configs.
- */
-function parseSimpleYaml(source: string): Record<string, string> {
-	const result: Record<string, string> = {};
-	for (const line of source.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith("#")) continue;
-		const colonIndex = trimmed.indexOf(":");
-		if (colonIndex === -1) continue;
-		const key = trimmed.slice(0, colonIndex).trim();
-		const value = trimmed.slice(colonIndex + 1).trim();
-		result[key] = value;
-	}
-	return result;
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface PianoRollMountOptions {
+	trackID: number;
+	validation: "playback" | "interaction";
+	hint?: string;
+	minInteractions?: number;
+	metronomeEnabled?: boolean;
+	/**
+	 * Explicit playground path from YAML, or undefined to fall back to the
+	 * preceding step comment. Set to `null` to skip playground resolution
+	 * entirely (used when inline notes are provided instead).
+	 */
+	playgroundField?: string | null;
+	/**
+	 * Inline notes + synthetic playground metadata. When set and no
+	 * `.mcplayground` file is resolved, these notes render directly.
+	 */
+	inline?: {
+		notes: NoteData[];
+		tempo: number;
+		bars: number;
+		soundbankSlug?: string;
+		title?: string;
+		isDrum?: boolean;
+	};
 }
 
-export function registerPianoRollProcessor(
-	plugin: Plugin,
-	engine: AudioEngine
-): void {
-	const roots: Root[] = [];
+// ---------------------------------------------------------------------------
+// Mount
+// ---------------------------------------------------------------------------
 
-	// Exclusive playback: only one piano roll plays at a time
-	let stopCurrentPlayback: (() => void) | null = null;
-	const requestExclusivePlayback = (stopFn: () => void) => {
-		if (stopCurrentPlayback) stopCurrentPlayback();
-		stopCurrentPlayback = stopFn;
+export function mountPianoRoll(
+	el: HTMLElement,
+	plugin: Plugin,
+	ctx: MarkdownPostProcessorContext,
+	engine: AudioEngine,
+	options: PianoRollMountOptions
+): Root {
+	const container = el.createDiv({ cls: "ea-block-container" });
+	const root = createRoot(container);
+
+	const playgroundField =
+		options.playgroundField === null
+			? undefined
+			: (options.playgroundField ??
+				findPlaygroundFromStepComment(el, ctx));
+
+	const render = (
+		playgroundData: PlaygroundData | undefined,
+		resolvedPath: string | undefined
+	) => {
+		const track = playgroundData?.tracks.find(
+			(t) => t.id === options.trackID
+		);
+		const soundbankSlug = track?.soundbankSlug || "";
+		const isDrum = track ? track.type === "drum" : !!options.inline?.isDrum;
+
+		if (soundbankSlug) {
+			engine
+				.initialize()
+				.then(() => engine.loadSoundbankForBlock(soundbankSlug))
+				.catch(() => {
+					// Fall through to synth
+				});
+		}
+
+		const handleSave = resolvedPath
+			? async (_trackID: number, notes: NoteData[]) => {
+					await savePlayground(resolvedPath, _trackID, notes);
+				}
+			: undefined;
+
+		const handleNotePlay = async (
+			noteNumber: number,
+			durationBeats?: number
+		) => {
+			await engine.initialize();
+			if (soundbankSlug) {
+				await engine.loadSoundbankForBlock(soundbankSlug);
+				engine.playSoundbankNote(soundbankSlug, noteNumber);
+			} else if (isDrum) {
+				engine.playClick();
+			} else {
+				const bpm = playgroundData?.tempo ?? 120;
+				const durationSec = durationBeats
+					? (durationBeats / bpm) * 60 + 0.3
+					: 1.2;
+				engine.playTone(noteNumber, durationSec);
+			}
+		};
+
+		const handleMetronomeClick = async () => {
+			await engine.initialize();
+			engine.playClick();
+		};
+
+		const handlePlaybackStart = async () => {
+			await engine.initialize();
+			if (soundbankSlug) {
+				await engine.loadSoundbankForBlock(soundbankSlug);
+			}
+		};
+
+		const noteNames = soundbankSlug
+			? engine.getNoteNamesForSoundbank(soundbankSlug)
+			: undefined;
+
+		root.render(
+			createElement(PianoRoll, {
+				trackID: options.trackID,
+				validation: options.validation,
+				hint: options.hint,
+				minInteractions: options.minInteractions,
+				defaultMetronomeOn: options.metronomeEnabled,
+				playgroundData,
+				playgroundPath: resolvedPath,
+				onSave: handleSave,
+				onNotePlay: handleNotePlay,
+				onPlaybackStart: handlePlaybackStart,
+				onRequestExclusivePlayback: globalExclusivePlayback,
+				onMetronomeClick: handleMetronomeClick,
+				noteNames,
+			})
+		);
 	};
 
-	plugin.registerMarkdownCodeBlockProcessor(
-		"pianoRoll",
-		async (
-			source: string,
-			el: HTMLElement,
-			ctx: MarkdownPostProcessorContext
-		) => {
-			const config = parseSimpleYaml(source);
-
-			// Validation: warn if trackID is missing
-			if (!config.trackID) {
-				const warningBar = el.createDiv({
-					cls: "ea-validation-warning",
-				});
-				warningBar.textContent =
-					"Warning: pianoRoll block is missing 'trackID' property";
-			}
-
-			const trackID = parseInt(config.trackID, 10) || 0;
-			const validation =
-				config.validation === "interaction"
-					? ("interaction" as const)
-					: ("playback" as const);
-
-			// Resolve playground path: explicit YAML field, or inherit from
-			// the nearest preceding <!-- step: ..., playground: ... --> comment
-			const playgroundField =
-				config.playground ??
-				findPlaygroundFromStepComment(plugin, el, ctx);
-
-			let playgroundData: PlaygroundData | undefined;
-			let resolvedPlaygroundPath: string | undefined;
-
-			if (playgroundField) {
-				try {
-					resolvedPlaygroundPath = resolvePlaygroundPath(
-						plugin,
-						playgroundField,
-						ctx.sourcePath
-					);
-					playgroundData = await readPlayground(
-						resolvedPlaygroundPath
-					);
-				} catch (err) {
-					const warningBar = el.createDiv({
-						cls: "ea-validation-warning",
-					});
-					const message =
-						err instanceof Error ? err.message : String(err);
-					warningBar.textContent = `Could not load playground: ${message}`;
-					console.error(
-						"PianoRoll: failed to load playground",
-						playgroundField,
-						err
-					);
-				}
-			}
-
-			// Determine soundbank slug from the target track
-			const track = playgroundData?.tracks.find(
-				(t) => t.id === trackID
-			);
-			const soundbankSlug = track?.soundbankSlug || "";
-			const isDrum = track ? track.type === "drum" : true;
-
-			// Eagerly load the soundbank if present
-			if (soundbankSlug) {
-				engine
-					.initialize()
-					.then(() =>
-						engine.loadSoundbankForBlock(soundbankSlug)
-					)
-					.catch(() => {
-						/* fallback to synth */
-					});
-			}
-
-			// Save callback: writes edits back to the .mcplayground file
-			const handleSave = resolvedPlaygroundPath
-				? async (_trackID: number, notes: NoteData[]) => {
-						await savePlayground(
-							resolvedPlaygroundPath!,
-							_trackID,
-							notes
-						);
-					}
-				: undefined;
-
-			// Play callback: plays audio feedback when a note is triggered
-			const handleNotePlay = async (
-				noteNumber: number,
-				durationBeats?: number
-			) => {
-				await engine.initialize();
-				if (soundbankSlug) {
-					await engine.loadSoundbankForBlock(soundbankSlug);
-					engine.playSoundbankNote(soundbankSlug, noteNumber);
-				} else if (isDrum) {
-					engine.playClick();
-				} else {
-					// Melodic: convert beat duration to seconds
-					const bpm = playgroundData?.tempo ?? 120;
-					const durationSec = durationBeats
-						? (durationBeats / bpm) * 60 + 0.3 // sustain + release tail
-						: 1.2;
-					engine.playTone(noteNumber, durationSec);
-				}
-			};
-
-			// Metronome click callback
-			const handleMetronomeClick = async () => {
-				await engine.initialize();
-				engine.playClick();
-			};
-
-			// Init callback: ensures engine + soundbank are ready (must run in user gesture)
-			const handlePlaybackStart = async () => {
-				await engine.initialize();
-				if (soundbankSlug) {
-					await engine.loadSoundbankForBlock(soundbankSlug);
-				}
-			};
-
-			// Build note names from soundbank config (resolves "Note 24" → "Kick")
-			const noteNames = soundbankSlug
-				? engine.getNoteNamesForSoundbank(soundbankSlug)
-				: undefined;
-
-			const container = el.createDiv({ cls: "ea-block-container" });
-			const root = createRoot(container);
-			roots.push(root);
-
-			root.render(
-				createElement(PianoRoll, {
-					trackID,
-					validation,
-					hint: config.hint,
-					minInteractions: config.minInteractions
-						? parseInt(config.minInteractions, 10)
-						: undefined,
-					defaultMetronomeOn: config.metronomeEnabled === "true",
-					playgroundData,
-					playgroundPath: resolvedPlaygroundPath,
-					onSave: handleSave,
-					onNotePlay: handleNotePlay,
-					onPlaybackStart: handlePlaybackStart,
-					onRequestExclusivePlayback: requestExclusivePlayback,
-					onMetronomeClick: handleMetronomeClick,
-					noteNames,
-				})
-			);
-		}
-	);
-
-	// Clean up all React roots when the plugin is unloaded
-	plugin.register(() => {
-		for (const root of roots) {
+	if (playgroundField) {
+		(async () => {
 			try {
-				root.unmount();
-			} catch {
-				// Root may already be unmounted if the markdown view was closed
+				const resolvedPath = resolvePlaygroundPath(
+					plugin,
+					playgroundField,
+					ctx.sourcePath
+				);
+				const data = await readPlayground(resolvedPath);
+				render(data, resolvedPath);
+			} catch (err) {
+				const warning = el.createDiv({ cls: "ea-validation-warning" });
+				warning.textContent = `Could not load playground: ${
+					err instanceof Error ? err.message : String(err)
+				}`;
+				console.error(
+					"PianoRoll: failed to load playground",
+					playgroundField,
+					err
+				);
+				renderFromInline();
 			}
+		})();
+	} else {
+		renderFromInline();
+	}
+
+	function renderFromInline() {
+		if (!options.inline || options.inline.notes.length === 0) {
+			render(undefined, undefined);
+			return;
 		}
-		roots.length = 0;
-	});
+
+		// Build synthetic PlaygroundData so the PianoRoll component treats
+		// inline notes the same as loaded clip data.
+		const { notes, tempo, bars, soundbankSlug, title, isDrum } =
+			options.inline;
+		const synthetic: PlaygroundData = {
+			tempo,
+			isLoopEnabled: true,
+			tracks: [
+				{
+					id: options.trackID,
+					type: isDrum ? "drum" : "melodic",
+					title: title ?? "Sequence",
+					soundbankSlug: soundbankSlug ?? "",
+					clips: [
+						{
+							lengthInBars: bars,
+							notes,
+						},
+					],
+				},
+			],
+		};
+		render(synthetic, undefined);
+	}
+
+	return root;
 }
 
+// ---------------------------------------------------------------------------
+// Shared exclusive-playback gate
+// ---------------------------------------------------------------------------
+
+let stopCurrentPlayback: (() => void) | null = null;
+function globalExclusivePlayback(stopFn: () => void) {
+	if (stopCurrentPlayback) stopCurrentPlayback();
+	stopCurrentPlayback = stopFn;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 /**
- * Look for a `<!-- step: ..., playground: ... -->` comment above this code
- * block in the source markdown. Returns the playground path if found.
+ * Walk upward from the code block to find a
+ * `<!-- step: ..., playground: ... -->` comment. Returns the playground
+ * path if found.
+ *
+ * Stops at headings (`#`, `##`, ...) since step comments belong to a
+ * single step within a chapter. Intervening code blocks (e.g. a `callout`
+ * above the `music sequence`) are walked through — earlier implementations
+ * broke on `\`\`\``, which caused the step comment to be missed whenever a
+ * step contained more than one block.
  */
-function findPlaygroundFromStepComment(
-	plugin: Plugin,
+export function findPlaygroundFromStepComment(
 	el: HTMLElement,
 	ctx: MarkdownPostProcessorContext
 ): string | undefined {
@@ -239,19 +249,14 @@ function findPlaygroundFromStepComment(
 	const { text, lineStart } = sectionInfo;
 	const lines = text.split("\n");
 
-	// Scan upward from the code block's opening line
 	for (let i = lineStart - 1; i >= 0; i--) {
 		const line = lines[i]?.trim();
 		if (!line) continue;
 
-		// Match <!-- step: ..., playground: ... -->
-		const match = line.match(
-			/<!--\s*step:.*?playground:\s*([^\s,>]+)/
-		);
+		const match = line.match(/<!--\s*step:.*?playground:\s*([^\s,>]+)/);
 		if (match) return match[1];
 
-		// Stop scanning if we hit a heading or another code block
-		if (line.startsWith("#") || line.startsWith("```")) break;
+		if (/^#{1,6}\s/.test(line)) break;
 	}
 
 	return undefined;
@@ -260,20 +265,18 @@ function findPlaygroundFromStepComment(
 /**
  * Resolve the playground path to an absolute filesystem path.
  *
- * The `playground` field in the YAML block can be:
- * - A path relative to the current note's directory (e.g., "assets/kick.mcplayground")
- * - A path relative to the vault root (e.g., "/Lessons/assets/kick.mcplayground")
- *
- * We first try resolving relative to the current note's folder, then
- * fall back to resolving relative to the vault root.
+ * Absolute-looking paths ("/Lessons/...") are resolved against the vault
+ * root; everything else is resolved relative to the current note's folder.
+ * Desktop only — the vault adapter must expose `getBasePath()`.
  */
-function resolvePlaygroundPath(
+export function resolvePlaygroundPath(
 	plugin: Plugin,
 	playgroundField: string,
 	sourcePath: string
 ): string {
-	// Get the vault's base path on disk (Electron only -- works in Obsidian desktop)
-	const adapter = plugin.app.vault.adapter as { getBasePath?: () => string };
+	const adapter = plugin.app.vault.adapter as {
+		getBasePath?: () => string;
+	};
 	if (!adapter.getBasePath) {
 		throw new Error(
 			"Cannot resolve playground path: vault adapter does not support getBasePath (mobile not supported)"
@@ -281,12 +284,69 @@ function resolvePlaygroundPath(
 	}
 	const vaultBase = adapter.getBasePath();
 
-	// If the path starts with /, treat it as vault-root-relative
 	if (playgroundField.startsWith("/")) {
 		return path.join(vaultBase, playgroundField);
 	}
 
-	// Otherwise, resolve relative to the current note's directory
 	const noteDir = path.dirname(sourcePath);
 	return path.join(vaultBase, noteDir, playgroundField);
+}
+
+// ---------------------------------------------------------------------------
+// Legacy `pianoRoll` code block processor
+// ---------------------------------------------------------------------------
+
+export function registerPianoRollProcessor(
+	plugin: Plugin,
+	engine: AudioEngine
+): void {
+	const roots: Root[] = [];
+
+	plugin.registerMarkdownCodeBlockProcessor(
+		"pianoRoll",
+		(
+			source: string,
+			el: HTMLElement,
+			ctx: MarkdownPostProcessorContext
+		) => {
+			const config = parseSimpleYaml(source);
+
+			if (!config.trackID) {
+				const warning = el.createDiv({
+					cls: "ea-validation-warning",
+				});
+				warning.textContent =
+					"Warning: pianoRoll block is missing 'trackID' property";
+			}
+
+			const trackID = parseInt(config.trackID, 10) || 0;
+			const validation =
+				config.validation === "interaction"
+					? "interaction"
+					: "playback";
+
+			const root = mountPianoRoll(el, plugin, ctx, engine, {
+				trackID,
+				validation,
+				hint: config.hint,
+				minInteractions: config.minInteractions
+					? parseInt(config.minInteractions, 10)
+					: undefined,
+				metronomeEnabled: config.metronomeEnabled === "true",
+				playgroundField: config.playground,
+			});
+			roots.push(root);
+		}
+	);
+
+	plugin.register(() => {
+		for (const root of roots) {
+			try {
+				root.unmount();
+			} catch {
+				// Already unmounted
+			}
+		}
+		roots.length = 0;
+	});
 }

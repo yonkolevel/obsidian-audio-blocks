@@ -117,7 +117,8 @@
 
 .ea-drum-pad:active,
 .ea-drum-pad--active {
-	background: rgba(70, 70, 70, 0.95);
+	background: #00FF9E;
+	color: rgba(0, 0, 0, 0.85);
 }
 
 .ea-drum-pad--highlighted {
@@ -137,7 +138,8 @@
 
 .theme-light .ea-drum-pad:active,
 .theme-light .ea-drum-pad--active {
-	background: rgba(180, 180, 180, 0.95);
+	background: #00FF9E;
+	color: rgba(0, 0, 0, 0.85);
 }
 
 .theme-light .ea-drum-pad--highlighted {
