@@ -46,6 +46,82 @@ import { MusicPatternPlayer } from "../components/MusicPatternPlayer";
 
 type Variant = "drums" | "keys" | "sequence" | "pattern" | "transport";
 
+// ---------------------------------------------------------------------------
+// Chord / scale expansion for the Midicircuit object syntax
+// { root: "C", type: "major" } and { root: "C", scaleType: "major" }
+// ---------------------------------------------------------------------------
+
+const NOTE_SEMITONES: Record<string, number> = {
+	C: 0, "C#": 1, Db: 1, D: 2, "D#": 3, Eb: 3,
+	E: 4, F: 5, "F#": 6, Gb: 6, G: 7, "G#": 8,
+	Ab: 8, A: 9, "A#": 10, Bb: 10, B: 11,
+};
+
+const CHORD_INTERVALS: Record<string, number[]> = {
+	major:   [0, 4, 7],
+	minor:   [0, 3, 7],
+	dim:     [0, 3, 6],
+	aug:     [0, 4, 8],
+	dom7:    [0, 4, 7, 10],
+	maj7:    [0, 4, 7, 11],
+	min7:    [0, 3, 7, 10],
+	sus2:    [0, 2, 7],
+	sus4:    [0, 5, 7],
+};
+
+const SCALE_INTERVALS: Record<string, number[]> = {
+	major:             [0, 2, 4, 5, 7, 9, 11],
+	minor:             [0, 2, 3, 5, 7, 8, 10],
+	"natural minor":   [0, 2, 3, 5, 7, 8, 10],
+	"harmonic minor":  [0, 2, 3, 5, 7, 8, 11],
+	"melodic minor":   [0, 2, 3, 5, 7, 9, 11],
+	pentatonic:        [0, 2, 4, 7, 9],
+	"pentatonic major":[0, 2, 4, 7, 9],
+	"pentatonic minor":[0, 3, 5, 7, 10],
+	blues:             [0, 3, 5, 6, 7, 10],
+	dorian:            [0, 2, 3, 5, 7, 9, 10],
+	phrygian:          [0, 1, 3, 5, 7, 8, 10],
+	lydian:            [0, 2, 4, 6, 7, 9, 11],
+	mixolydian:        [0, 2, 4, 5, 7, 9, 10],
+	locrian:           [0, 1, 3, 5, 6, 8, 10],
+};
+
+function expandChordConfig(value: unknown): number[] | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (Array.isArray(value)) return undefined; // handled by parseNoteNames
+	if (typeof value !== "object") return undefined;
+
+	const obj = value as Record<string, unknown>;
+	const root = asString(obj.root)?.trim();
+	const type = asString(obj.type)?.toLowerCase().trim();
+	if (!root || !type) return undefined;
+
+	const semitone = NOTE_SEMITONES[root];
+	const intervals = CHORD_INTERVALS[type];
+	if (semitone === undefined || !intervals) return undefined;
+
+	return intervals.map((i) => 60 + semitone + i);
+}
+
+function expandScaleConfig(value: unknown): number[] | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (Array.isArray(value)) return undefined;
+	if (typeof value !== "object") return undefined;
+
+	const obj = value as Record<string, unknown>;
+	const root = asString(obj.root)?.trim();
+	const scaleType = (asString(obj.scaleType) ?? asString(obj.type))
+		?.toLowerCase()
+		.trim();
+	if (!root || !scaleType) return undefined;
+
+	const semitone = NOTE_SEMITONES[root];
+	const intervals = SCALE_INTERVALS[scaleType];
+	if (semitone === undefined || !intervals) return undefined;
+
+	return intervals.map((i) => 60 + semitone + i);
+}
+
 const VALID_VARIANTS: ReadonlySet<string> = new Set([
 	"drums",
 	"keys",
@@ -61,56 +137,64 @@ export function registerMusicProcessor(
 ): void {
 	const roots: Root[] = [];
 
-	// Obsidian dispatches `registerMarkdownCodeBlockProcessor` on the first
-	// whitespace-separated token of the fence info, so ```music drums
-	// routes to the "music" processor and "drums" is the variant we have
-	// to extract ourselves from the fence line.
+	// Register each variant both as "music <variant>" (full info-string match,
+	// which is how Obsidian actually dispatches code block processors) and keep
+	// a "music" fallback that reads the variant itself for editors that DO split
+	// on the first token.
+	const handle = (
+		variant: Variant,
+		source: string,
+		el: HTMLElement,
+		ctx: MarkdownPostProcessorContext
+	) => {
+		const { bodyLines } = parseMusicBlock(source);
+		const config = parseConfigYaml(source);
+
+		switch (variant) {
+			case "drums":
+				roots.push(renderDrums(el, config, engine, focusManager));
+				break;
+			case "keys":
+				roots.push(renderKeys(el, config, engine, focusManager));
+				break;
+			case "sequence":
+				roots.push(renderSequence(el, plugin, ctx, config, bodyLines, engine));
+				break;
+			case "pattern":
+				roots.push(renderPattern(el, config, bodyLines, engine));
+				break;
+			case "transport":
+				roots.push(renderTransport(el, config, engine));
+				break;
+		}
+	};
+
+	// Per-variant registrations — "music drums", "music sequence", etc.
+	// Obsidian matches registerMarkdownCodeBlockProcessor on the full info
+	// string, so ```music drums routes here directly.
+	for (const variant of VALID_VARIANTS) {
+		plugin.registerMarkdownCodeBlockProcessor(
+			`music ${variant}`,
+			(source, el, ctx) => handle(variant as Variant, source, el, ctx)
+		);
+	}
+
+	// "music" fallback — for any editor that strips the variant suffix before
+	// dispatching. Reads the variant from the fence line via getSectionInfo.
 	plugin.registerMarkdownCodeBlockProcessor(
 		"music",
-		(
-			source: string,
-			el: HTMLElement,
-			ctx: MarkdownPostProcessorContext
-		) => {
+		(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
 			const variant = readVariantFromFence(el, ctx);
 
 			if (!variant || !VALID_VARIANTS.has(variant)) {
 				const warning = el.createDiv({ cls: "ea-validation-warning" });
 				warning.textContent = variant
-					? `Unknown music block variant: ${variant}. Expected one of: drums, keys, sequence, pattern, transport.`
-					: "music block is missing a variant. Use ```music drums, ```music keys, etc.";
+					? `Unknown music block variant: "${variant}". Expected: drums, keys, sequence, pattern, transport.`
+					: "music block missing variant — use ```music drums, ```music keys, etc.";
 				return;
 			}
 
-			const { bodyLines } = parseMusicBlock(source);
-			const config = parseConfigYaml(source);
-
-			switch (variant as Variant) {
-				case "drums":
-					roots.push(renderDrums(el, config, engine, focusManager));
-					break;
-				case "keys":
-					roots.push(renderKeys(el, config, engine, focusManager));
-					break;
-				case "sequence":
-					roots.push(
-						renderSequence(
-							el,
-							plugin,
-							ctx,
-							config,
-							bodyLines,
-							engine
-						)
-					);
-					break;
-				case "pattern":
-					roots.push(renderPattern(el, config, bodyLines, engine));
-					break;
-				case "transport":
-					roots.push(renderTransport(el, config, engine));
-					break;
-			}
+			handle(variant as Variant, source, el, ctx);
 		}
 	);
 
@@ -249,6 +333,13 @@ function renderKeys(
 		}
 	})();
 
+	const expectedChord =
+		parseNoteNames(config.expectedChord) ??
+		expandChordConfig(config.expectedChord);
+	const expectedScale =
+		parseNoteNames(config.expectedScale) ??
+		expandScaleConfig(config.expectedScale);
+
 	return mountPianoKeys(el, engine, focusManager, {
 		soundbank,
 		octaves: asNumber(config.octaves) ?? 2,
@@ -257,8 +348,9 @@ function renderKeys(
 		highlightColor,
 		validation,
 		minInteractions: asNumber(config.minInteractions),
-		expectedChord: parseNoteNames(config.expectedChord),
-		expectedScale: parseNoteNames(config.expectedScale),
+		expectedChord,
+		expectedScale,
+		showNoteNames: asBoolean(config.showNoteNames),
 	});
 }
 

@@ -1,6 +1,15 @@
 import React, { useCallback, useState } from "react";
 import { PianoKeys as KitPianoKeys } from "elementary-audio-kit/ui";
 
+const NOTE_NAMES_CHROMATIC = [
+	"C", "C#", "D", "D#", "E", "F",
+	"F#", "G", "G#", "A", "A#", "B",
+];
+
+function midiToNoteName(n: number): string {
+	return NOTE_NAMES_CHROMATIC[n % 12];
+}
+
 export interface PianoKeysProps {
 	soundbank: string;
 	octaves: number;
@@ -11,6 +20,7 @@ export interface PianoKeysProps {
 	minInteractions?: number;
 	expectedChord?: number[];
 	expectedScale?: number[];
+	showNoteNames?: boolean;
 	isLoading?: boolean;
 	onNoteOn: (noteNumber: number) => void;
 	onNoteOff: (noteNumber: number) => void;
@@ -27,6 +37,7 @@ export function PianoKeys({
 	minInteractions,
 	expectedChord,
 	expectedScale,
+	showNoteNames,
 	isLoading,
 	onNoteOn,
 	onNoteOff,
@@ -120,6 +131,22 @@ export function PianoKeys({
 				highlightColor={highlightColor}
 				defaultKeyboardEnabled={false}
 			/>
+
+			{showNoteNames && highlightedNotes && highlightedNotes.length > 0 && (
+				<div className="ea-piano-note-names">
+					{[...new Set(highlightedNotes.map((n) => n % 12))]
+						.sort((a, b) => a - b)
+						.map((pc) => (
+							<span
+								key={pc}
+								className="ea-piano-note-name-chip"
+								style={{ backgroundColor: highlightColor }}
+							>
+								{NOTE_NAMES_CHROMATIC[pc]}
+							</span>
+						))}
+				</div>
+			)}
 
 			{hint && <p className="ea-piano-hint">{hint}</p>}
 			<p className="ea-piano-soundbank">Soundbank: {soundbank}</p>

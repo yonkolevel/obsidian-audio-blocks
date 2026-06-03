@@ -93,6 +93,7 @@ export interface PianoKeysMountOptions {
 	minInteractions?: number;
 	expectedChord?: number[];
 	expectedScale?: number[];
+	showNoteNames?: boolean;
 }
 
 export function mountPianoKeys(
@@ -148,6 +149,7 @@ export function mountPianoKeys(
 				minInteractions: options.minInteractions,
 				expectedChord: options.expectedChord,
 				expectedScale: options.expectedScale,
+				showNoteNames: options.showNoteNames,
 				isLoading,
 				onNoteOn: handleNoteOn,
 				onNoteOff: handleNoteOff,

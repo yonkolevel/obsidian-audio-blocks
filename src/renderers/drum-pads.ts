@@ -81,6 +81,10 @@ export function mountDrumPads(
 	const root = createRoot(container);
 
 	let isLoading = true;
+	// Resolved after soundbank load: values > 15 are treated as MIDI note
+	// numbers and converted to 0-based pad indices via the soundbank's
+	// defaultOctave. Values ≤ 15 are already 0-based and used as-is.
+	let resolvedHighlightedPads: number[] | undefined = options.highlightedPads;
 
 	const buildLabels = (): string[] | undefined => {
 		if (!soundbankSlug) return undefined;
@@ -144,7 +148,7 @@ export function mountDrumPads(
 			createElement(DrumPads, {
 				soundbank: soundbankSlug || "default",
 				hint: options.hint,
-				highlightedPads: options.highlightedPads,
+				highlightedPads: resolvedHighlightedPads,
 				validation:
 					options.validation === "interaction"
 						? "interaction"
@@ -165,6 +169,13 @@ export function mountDrumPads(
 
 	const finishLoad = () => {
 		isLoading = false;
+		if (soundbankSlug && options.highlightedPads?.some((v) => v > 15)) {
+			const defaultOctave =
+				engine.getSoundbankDefaultOctave(soundbankSlug) ?? 24;
+			resolvedHighlightedPads = options.highlightedPads
+				.map((v) => v - defaultOctave)
+				.filter((v) => v >= 0 && v <= 15);
+		}
 		render();
 	};
 
