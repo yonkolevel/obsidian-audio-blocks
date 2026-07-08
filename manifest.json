@@ -1,9 +1,9 @@
 {
-	"id": "elementary-audio",
-	"name": "Elementary Audio",
+	"id": "audio-blocks",
+	"name": "Audio Blocks",
 	"version": "0.1.0",
 	"minAppVersion": "1.0.0",
-	"description": "Interactive audio blocks in markdown — drum pads, piano, sequencer",
+	"description": "Interactive audio blocks in markdown \u2014 drum pads, piano, sequencer",
 	"author": "Ricardo Abreu",
 	"isDesktopOnly": true
 }

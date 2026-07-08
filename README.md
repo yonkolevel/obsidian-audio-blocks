@@ -1,4 +1,4 @@
-# Elementary Audio — Obsidian Plugin
+# Audio Blocks — Obsidian Plugin
 
 An Obsidian plugin that renders **interactive audio blocks** directly in Markdown notes. Tap drum pads, play a piano keyboard, step-sequence patterns, or view a full piano-roll — all inside your vault.
 
@@ -227,8 +227,8 @@ Reads `.mcplayground` ZIP archives (produced by the Midicircuit app) using `jszi
 ### Setup
 
 ```bash
-git clone https://github.com/your-org/obsidian-elementary-audio
-cd obsidian-elementary-audio
+git clone https://github.com/yonkolevel/obsidian-audio-blocks
+cd obsidian-audio-blocks
 npm install
 ```
 
@@ -252,9 +252,9 @@ Bundles to `main.js` with tree-shaking and no sourcemaps.
 
 1. Copy `main.js`, `manifest.json`, and `styles.css` to:
    ```
-   <vault>/.obsidian/plugins/elementary-audio/
+   <vault>/.obsidian/plugins/audio-blocks/
    ```
-2. In Obsidian: **Settings → Community Plugins → Reload plugins → enable Elementary Audio**.
+2. In Obsidian: **Settings → Community Plugins → Reload plugins → enable Audio Blocks**.
 
 ---
 

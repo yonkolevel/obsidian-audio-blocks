@@ -80,7 +80,7 @@ export default class ElementaryAudioPlugin extends Plugin {
 	settings: ElementaryAudioSettings = DEFAULT_SETTINGS;
 
 	async onload() {
-		console.log("Elementary Audio: loading plugin");
+		console.log("Audio Blocks: loading plugin");
 
 		// Load persisted settings
 		await this.loadSettings();
@@ -93,7 +93,7 @@ export default class ElementaryAudioPlugin extends Plugin {
 
 		// Kick off soundbank discovery in background
 		this.soundbankManager.discoverSoundbanks().catch((err) => {
-			console.warn("Elementary Audio: soundbank discovery failed:", err);
+			console.warn("Audio Blocks: soundbank discovery failed:", err);
 		});
 
 		// Register settings tab
@@ -133,7 +133,7 @@ export default class ElementaryAudioPlugin extends Plugin {
 	}
 
 	onunload() {
-		console.log("Elementary Audio: unloading plugin");
+		console.log("Audio Blocks: unloading plugin");
 		this.audioEngine.dispose();
 	}
 
@@ -152,7 +152,7 @@ export default class ElementaryAudioPlugin extends Plugin {
 			);
 			this.soundbankManager.discoverSoundbanks().catch((err) => {
 				console.warn(
-					"Elementary Audio: soundbank re-discovery failed:",
+					"Audio Blocks: soundbank re-discovery failed:",
 					err
 				);
 			});

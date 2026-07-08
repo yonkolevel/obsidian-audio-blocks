@@ -1,5 +1,5 @@
 {
-	"name": "obsidian-elementary-audio",
+	"name": "obsidian-audio-blocks",
 	"version": "0.2.0",
 	"main": "main.js",
 	"scripts": {
