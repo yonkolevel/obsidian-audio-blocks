@@ -256,6 +256,24 @@ Bundles to `main.js` with tree-shaking and no sourcemaps.
    ```
 2. In Obsidian: **Settings → Community Plugins → Reload plugins → enable Audio Blocks**.
 
+### Releasing a new version
+
+Releases are built and drafted automatically by `.github/workflows/release.yml` on every tag push.
+
+1. Bump `"version"` in `manifest.json` (and keep `package.json` in sync). Semver, **no `v` prefix**.
+2. Add an entry to `versions.json` mapping the new version to the minimum Obsidian version, e.g. `"0.2.1": "1.0.0"`.
+3. Commit, then tag and push — the tag must match `manifest.json` exactly (CI fails otherwise):
+   ```bash
+   git tag 0.2.1 && git push origin HEAD --tags
+   ```
+4. Wait for the green workflow run, review the drafted release notes, then publish:
+   ```bash
+   gh release edit 0.2.1 --draft=false
+   ```
+   (or click **Publish** on the GitHub releases page).
+
+The published release carries `main.js`, `manifest.json`, and `styles.css` as assets — this is what [BRAT](https://github.com/TfTHacker/obsidian42-brat) and the Obsidian community directory install from. Users on BRAT can add this plugin as `yonkolevel/obsidian-audio-blocks`.
+
 ---
 
 ## Settings
